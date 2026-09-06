@@ -11,6 +11,8 @@ import { generateEODPDF, generateRouteExcel } from '../../../legacy/reporting';
 import { saveGpsConsent } from '../services/gpsConsent';
 import { EndOfDayReport, GpsConsentModal, TechHistorySearch, TechJobCard } from '../components/TechnicianComponents';
 import { PendingJobReminder } from '../components/PendingJobReminder';
+import { PushGate } from '../components/PushGate';
+import { getNotificationPermission, isPushSupported } from '../../../services/push.service';
 import { WeatherLivePanel } from '../../../shared/components/WeatherLivePanel';
 import { notifyWithSound } from '../../../services/notification.service';
 import { createAuditLog } from '../../../services/audit.service';
@@ -45,6 +47,7 @@ function TechPortal({tech,onLogout,onSessionExpired,lang,setLang}){
   const[techNotesSent,setTechNotesSent]=useState<any[]>([]);
   const[showEOD,setShowEOD]=useState(false);
   const[isOnline,setIsOnline]=useState(navigator.onLine);
+  const[pushPermission,setPushPermission]=useState(()=>getNotificationPermission());
   const[showBulkSms,setShowBulkSms]=useState(false);
   const[showGpsConsent,setShowGpsConsent]=useState(false);
   const[showPinChange,setShowPinChange]=useState(false);
@@ -853,6 +856,12 @@ function TechPortal({tech,onLogout,onSessionExpired,lang,setLang}){
     {id:'notdone',label:'Not Done',count:notDone.length,color:C.red},
     {id:'photos',label:lang==='es'?'Sin fotos':'No photos',count:pendingNoPhotos.length,color:'#ffbe00'},
   ];
+
+  // ── BLOQUEO OBLIGATORIO — el técnico no ve nada de su ruta hasta que
+  // las notificaciones queden en 'granted'. Sin botón para saltarlo. ──
+  if(pushPermission!=='granted'&&isPushSupported()){
+    return <PushGate lang={lang} techId={tech.id} onGranted={()=>setPushPermission('granted')}/>;
+  }
 
   return(
     <div className="tech-portal tech-portal-v226" style={{minHeight:"100vh",background:C.bg,fontFamily:"'Barlow',sans-serif",paddingBottom:40}}>
