@@ -1,0 +1,25 @@
+{
+  "name": "Guajiro & Sons Field Suite v2.0",
+  "short_name": "Guajiro Field",
+  "description": "PWA para operaciones de campo, rutas, fotos, reportes y t\u00e9cnicos.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#04091c",
+  "theme_color": "#00b8f5",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/Lazy_Tech.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/Lazy_Tech.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

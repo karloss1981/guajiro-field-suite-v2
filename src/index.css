@@ -1,0 +1,991 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,body,#root{min-height:100%;margin:0;background:#05080f}
+body{min-width:320px;color:#f5f7fb;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+button,input,select,textarea{font:inherit}
+button{-webkit-tap-highlight-color:transparent}
+::selection{background:rgba(255,106,26,.35);color:#fff}
+*{scrollbar-width:thin;scrollbar-color:#26344a #080c13}
+*::-webkit-scrollbar{width:9px;height:9px}
+*::-webkit-scrollbar-track{background:#080c13}
+*::-webkit-scrollbar-thumb{background:#26344a;border-radius:99px;border:2px solid #080c13}
+
+@keyframes gfsNotificationIn {
+  from { opacity: 0; transform: translateY(10px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* v22.6 Technician UX + responsive cleanup */
+.tech-portal-v226 .tech-filter-pills::-webkit-scrollbar{height:0}
+.tech-portal-v226 .tech-content{transition:max-width .2s ease,padding .2s ease}
+.tech-portal-v226 .tech-job-list{display:grid;grid-template-columns:1fr;gap:12px}
+@media (min-width: 760px){
+  .tech-portal-v226 .tech-content{max-width:740px!important;padding:18px!important}
+  .tech-portal-v226 .tech-header{padding:12px 18px!important}
+}
+@media (min-width: 1120px){
+  .tech-portal-v226 .tech-content{max-width:980px!important}
+  .tech-portal-v226 .tech-job-list{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+}
+@media (max-width: 480px){
+  .tech-portal-v226 .tech-header{gap:5px!important;padding:8px 9px!important;overflow-x:auto}
+  .tech-portal-v226 .tech-header::-webkit-scrollbar{height:0}
+  .tech-portal-v226 .tech-tabs{position:sticky;top:48px;z-index:45;overflow-x:auto}
+  .tech-portal-v226 .tech-tabs button{min-width:95px!important;font-size:11px!important;padding:10px 6px!important}
+  .tech-portal-v226 .tech-content{padding:10px!important}
+}
+
+/* v24 Clean Release UI pass: navigation and responsive organization only */
+.supervisor-portal-clean{
+  padding-bottom:72px;
+}
+.supervisor-portal-clean .supervisor-tabbar-clean{
+  position:sticky;
+  top:57px;
+  z-index:90;
+  gap:2px!important;
+}
+.supervisor-portal-clean .supervisor-tabbar-clean::-webkit-scrollbar{height:0}
+.supervisor-command-center button,
+.supervisor-dashboard-clean button,
+.tech-portal-v226 button{
+  min-height:38px;
+}
+.supervisor-command-center button:hover{
+  border-color:#00b8f577!important;
+  background:#10264a!important;
+}
+.supervisor-command-center button:focus-visible,
+.supervisor-dashboard-clean button:focus-visible,
+.tech-portal-v226 button:focus-visible{
+  outline:2px solid #00b8f5;
+  outline-offset:2px;
+}
+@media (min-width: 900px){
+  .supervisor-portal-clean > div[style*="max-width:1280"]{
+    padding-left:24px!important;
+    padding-right:24px!important;
+  }
+}
+@media (max-width: 760px){
+  .supervisor-portal-clean .supervisor-tabbar-clean{
+    top:55px;
+    padding:0 6px!important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean button{
+    min-width:max-content;
+    padding:10px 11px!important;
+    font-size:12px!important;
+  }
+  .supervisor-command-header{
+    flex-direction:column;
+  }
+  .supervisor-command-grid{
+    grid-template-columns:1fr!important;
+  }
+}
+@media (max-width: 480px){
+  .supervisor-portal-clean{
+    padding-bottom:92px;
+  }
+  .supervisor-command-center{
+    padding:14px!important;
+    border-radius:14px!important;
+  }
+  .supervisor-command-center button{
+    padding:9px 10px!important;
+  }
+}
+
+/* v24.6.1 Desktop + Mobile layout repair
+   Scope: navigation organization, supervisor route core layout, technician responsive shell. */
+:root{
+  --gfs-sidebar-w: 244px;
+  --gfs-topbar-h: 58px;
+}
+.supervisor-portal-clean,
+.tech-portal-v226{box-sizing:border-box;overflow-x:hidden}
+.supervisor-portal-clean *{box-sizing:border-box}
+.supervisor-topbar{min-height:var(--gfs-topbar-h)}
+.supervisor-main-content{width:100%;box-sizing:border-box}
+.supervisor-route-tech-list{display:flex;flex-direction:column;gap:14px;min-width:0}
+.supervisor-route-toolbar > button,
+.supervisor-route-toolbar input,
+.supervisor-route-toolbar select{min-height:40px}
+.supervisor-tech-card{box-shadow:0 10px 26px rgba(0,0,0,.16)}
+.supervisor-job-actions{flex-wrap:wrap}
+
+@media (min-width:1180px){
+  .supervisor-portal-clean{padding-left:var(--gfs-sidebar-w)!important}
+  .supervisor-portal-clean .supervisor-topbar{
+    margin-left:calc(var(--gfs-sidebar-w) * -1)!important;
+    width:calc(100% + var(--gfs-sidebar-w))!important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean{
+    position:fixed!important;
+    top:var(--gfs-topbar-h)!important;
+    left:0!important;
+    bottom:0!important;
+    width:var(--gfs-sidebar-w)!important;
+    height:auto!important;
+    display:flex!important;
+    flex-direction:column!important;
+    align-items:stretch!important;
+    justify-content:flex-start!important;
+    gap:6px!important;
+    padding:12px 10px!important;
+    overflow-y:auto!important;
+    overflow-x:hidden!important;
+    background:linear-gradient(180deg,#050c20,#04091c)!important;
+    border-right:1px solid #1a3060!important;
+    border-bottom:0!important;
+    box-shadow:18px 0 35px rgba(0,0,0,.18);
+    z-index:95!important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean button{
+    width:100%!important;
+    min-height:38px!important;
+    height:auto!important;
+    display:flex!important;
+    align-items:center!important;
+    justify-content:flex-start!important;
+    text-align:left!important;
+    padding:10px 12px!important;
+    border:1px solid transparent!important;
+    border-bottom:0!important;
+    border-radius:12px!important;
+    color:#9eb3d3;
+    font-size:12px!important;
+    line-height:1.15!important;
+    white-space:normal!important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean button:hover{
+    background:#0e1e3a!important;
+    border-color:#1a3060!important;
+    color:#eaf4ff!important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean button.is-active{
+    background:#092043!important;
+    border-color:#00b8f566!important;
+    color:#00d5ff!important;
+    box-shadow:inset 3px 0 0 #00b8f5;
+  }
+  .supervisor-main-content{
+    max-width:none!important;
+    width:100%!important;
+    margin:0!important;
+    padding:18px 24px 28px!important;
+  }
+  .supervisor-route-page{
+    display:grid!important;
+    grid-template-columns:minmax(320px,420px) minmax(0,1fr)!important;
+    gap:16px!important;
+    align-items:start!important;
+  }
+  .supervisor-route-card{
+    position:sticky!important;
+    top:calc(var(--gfs-topbar-h) + 18px)!important;
+    align-self:start!important;
+  }
+  .supervisor-route-toolbar{
+    display:grid!important;
+    grid-template-columns:1fr 1fr!important;
+    align-items:stretch!important;
+  }
+  .supervisor-route-toolbar > button{width:100%!important;justify-content:center!important}
+  .supervisor-route-toolbar > div{grid-column:1 / -1!important;width:100%!important;max-width:none!important}
+  .supervisor-route-stats{display:grid!important;grid-template-columns:1fr 1fr!important;gap:10px!important}
+  .supervisor-route-stats > *{min-width:0!important;flex:1 1 auto!important}
+}
+
+@media (min-width:760px) and (max-width:1179px){
+  .supervisor-main-content{max-width:980px!important;padding:16px!important}
+  .supervisor-route-page{max-width:980px;margin:0 auto!important}
+  .supervisor-portal-clean .supervisor-tabbar-clean button{font-size:12px!important;padding:10px 12px!important}
+}
+
+@media (max-width:760px){
+  .supervisor-topbar{flex-wrap:wrap!important;gap:8px!important;padding:9px 10px!important}
+  .supervisor-topbar > div:first-child{flex-basis:100%!important}
+  .supervisor-main-content{padding:10px!important;max-width:none!important}
+  .supervisor-route-card{padding:14px!important;border-radius:14px!important}
+  .supervisor-route-toolbar{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+  .supervisor-route-toolbar > button{width:100%!important;padding:10px 8px!important;font-size:12px!important}
+  .supervisor-route-toolbar > div{grid-column:1 / -1!important;width:100%!important;max-width:none!important}
+  .supervisor-route-stats{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important;width:100%}
+  .supervisor-tech-header{align-items:flex-start!important;gap:9px!important;padding:12px!important}
+  .supervisor-tech-header > div:nth-child(2){min-width:0!important}
+  .supervisor-tech-actions{margin-left:auto;flex-direction:column!important}
+  .supervisor-job-actions button{flex:1 1 calc(50% - 6px)!important;min-width:120px!important}
+}
+
+@media (max-width:480px){
+  .supervisor-portal-clean .supervisor-tabbar-clean{top:78px!important;gap:4px!important}
+  .supervisor-portal-clean .supervisor-tabbar-clean button{font-size:11px!important;padding:9px 10px!important}
+  .supervisor-route-toolbar{grid-template-columns:1fr!important}
+  .supervisor-route-stats{grid-template-columns:1fr!important}
+  .supervisor-tech-header{flex-wrap:wrap!important}
+  .supervisor-tech-actions{width:100%!important;flex-direction:row!important;justify-content:flex-end!important}
+}
+
+/* Technician portal desktop/mobile shell cleanup */
+.tech-portal-v226 *{box-sizing:border-box}
+.tech-portal-v226 .tech-content{width:100%;box-sizing:border-box}
+.tech-portal-v226 .tech-tabs button{min-height:44px}
+@media (min-width:1180px){
+  .tech-portal-v226{
+    display:grid!important;
+    grid-template-columns:250px minmax(0,1fr)!important;
+    grid-template-rows:auto 1fr!important;
+    padding-bottom:0!important;
+  }
+  .tech-portal-v226 .tech-header{grid-column:1 / -1!important;min-height:var(--gfs-topbar-h);z-index:70!important}
+  .tech-portal-v226 .tech-tabs{
+    position:sticky!important;
+    top:var(--gfs-topbar-h)!important;
+    height:calc(100vh - var(--gfs-topbar-h))!important;
+    align-self:start!important;
+    display:flex!important;
+    flex-direction:column!important;
+    align-items:stretch!important;
+    padding:12px 10px!important;
+    gap:6px!important;
+    overflow-y:auto!important;
+    border-right:1px solid #162e58!important;
+    border-bottom:0!important;
+    background:linear-gradient(180deg,#050c20,#04091c)!important;
+  }
+  .tech-portal-v226 .tech-tabs button{
+    flex:0 0 auto!important;
+    width:100%!important;
+    text-align:left!important;
+    justify-content:flex-start!important;
+    border:1px solid transparent!important;
+    border-radius:12px!important;
+    padding:12px 14px!important;
+  }
+  .tech-portal-v226 .tech-tabs button.is-active{
+    background:#092043!important;
+    border-color:#00b8f566!important;
+    color:#00d5ff!important;
+    box-shadow:inset 3px 0 0 #00b8f5;
+  }
+  .tech-portal-v226 .tech-content{
+    max-width:1120px!important;
+    margin:0!important;
+    padding:20px 24px!important;
+  }
+}
+@media (max-width:760px){
+  .tech-portal-v226 .tech-header{flex-wrap:wrap!important;gap:7px!important;padding:9px 10px!important}
+  .tech-portal-v226 .tech-tabs{position:sticky!important;top:56px!important;z-index:45!important;overflow-x:auto!important;gap:0!important}
+  .tech-portal-v226 .tech-tabs button{min-width:max-content!important;flex:0 0 auto!important;padding:10px 12px!important;font-size:12px!important}
+  .tech-portal-v226 .tech-content{max-width:none!important;padding:10px!important}
+}
+
+
+/* v24.6.2 Responsive shell hardening: real web/desktop/tablet/mobile breakpoints.
+   The 1180px sidebar was too aggressive on normal laptop widths and squeezed/distorted
+   the app. Keep top navigation until wide desktop; use side navigation only on large web. */
+@media (min-width:1180px) and (max-width:1439px){
+  .supervisor-portal-clean{padding-left:0!important}
+  .supervisor-portal-clean .supervisor-topbar{
+    margin-left:0!important;
+    width:100%!important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean{
+    position:sticky!important;
+    top:var(--gfs-topbar-h)!important;
+    left:auto!important;
+    bottom:auto!important;
+    width:100%!important;
+    height:auto!important;
+    display:flex!important;
+    flex-direction:row!important;
+    align-items:center!important;
+    gap:4px!important;
+    padding:0 10px!important;
+    overflow-x:auto!important;
+    overflow-y:hidden!important;
+    border-right:0!important;
+    border-bottom:1px solid #1a3060!important;
+    box-shadow:none!important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean button{
+    width:auto!important;
+    flex:0 0 auto!important;
+    white-space:nowrap!important;
+    text-align:center!important;
+    border-radius:10px 10px 0 0!important;
+    padding:11px 13px!important;
+  }
+  .supervisor-main-content{
+    max-width:1240px!important;
+    width:100%!important;
+    margin:0 auto!important;
+    padding:16px 18px 28px!important;
+  }
+  .supervisor-route-page{
+    display:grid!important;
+    grid-template-columns:minmax(300px,380px) minmax(0,1fr)!important;
+    gap:14px!important;
+  }
+
+  .tech-portal-v226{
+    display:block!important;
+    padding-bottom:40px!important;
+  }
+  .tech-portal-v226 .tech-header{min-height:var(--gfs-topbar-h)!important}
+  .tech-portal-v226 .tech-tabs{
+    position:sticky!important;
+    top:var(--gfs-topbar-h)!important;
+    z-index:60!important;
+    display:flex!important;
+    flex-direction:row!important;
+    align-items:center!important;
+    gap:4px!important;
+    padding:0 10px!important;
+    overflow-x:auto!important;
+    overflow-y:hidden!important;
+    border-right:0!important;
+    border-bottom:1px solid #162e58!important;
+    background:#071327!important;
+  }
+  .tech-portal-v226 .tech-tabs button{
+    flex:0 0 auto!important;
+    width:auto!important;
+    min-width:130px!important;
+    text-align:center!important;
+    justify-content:center!important;
+    border-radius:10px 10px 0 0!important;
+    padding:11px 13px!important;
+  }
+  .tech-portal-v226 .tech-content{
+    max-width:1240px!important;
+    width:100%!important;
+    margin:0 auto!important;
+    padding:16px 18px 28px!important;
+  }
+  .tech-portal-v226 .tech-job-list{
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:14px!important;
+  }
+}
+
+@media (min-width:1440px){
+  :root{--gfs-sidebar-w:clamp(216px,15vw,268px)}
+  .supervisor-main-content{max-width:none!important;width:100%!important;padding:20px 28px 32px!important}
+  .tech-portal-v226{grid-template-columns:clamp(216px,15vw,268px) minmax(0,1fr)!important}
+  .tech-portal-v226 .tech-content{max-width:none!important;width:100%!important;padding:22px 28px 32px!important}
+  .tech-portal-v226 .tech-job-list{grid-template-columns:repeat(auto-fit,minmax(360px,1fr))!important;gap:16px!important}
+}
+
+@media (min-width:760px) and (max-width:1179px){
+  .supervisor-main-content,
+  .tech-portal-v226 .tech-content{max-width:1000px!important;width:100%!important;margin:0 auto!important;padding:14px 16px 24px!important}
+  .tech-portal-v226 .tech-job-list{grid-template-columns:1fr!important}
+}
+
+@media (max-width:759px){
+  .supervisor-main-content,
+  .tech-portal-v226 .tech-content{max-width:none!important;width:100%!important;margin:0!important;padding:10px!important}
+  .tech-portal-v226 .tech-job-list{grid-template-columns:1fr!important}
+  .tech-portal-v226 .tech-tabs button{min-width:108px!important}
+}
+
+/* v24.7 Desktop/Web layout correction
+   Goal: professional adaptive shell, readable desktop spacing, no crushed menus, no distorted dashboard. */
+:root{
+  --gfs-web-sidebar: clamp(248px, 15.5vw, 286px);
+  --gfs-web-gutter: clamp(18px, 2vw, 34px);
+  --gfs-web-radius: 18px;
+}
+
+.supervisor-portal-clean,
+.tech-portal-v226{
+  background: radial-gradient(circle at 22% 0%, rgba(0,184,245,.08), transparent 24rem), #04091c !important;
+}
+.supervisor-main-content,
+.tech-portal-v226 .tech-content{
+  min-width:0 !important;
+}
+.supervisor-main-content > * + *,
+.tech-portal-v226 .tech-content > * + *{
+  margin-top:16px;
+}
+
+/* Standard desktop and web shell */
+@media (min-width: 1280px){
+  .supervisor-portal-clean{
+    display:grid !important;
+    grid-template-columns: var(--gfs-web-sidebar) minmax(0,1fr) !important;
+    grid-template-rows: var(--gfs-topbar-h) 1fr !important;
+    padding-left:0 !important;
+  }
+  .supervisor-portal-clean .supervisor-topbar{
+    grid-column:1 / -1 !important;
+    position:sticky !important;
+    top:0 !important;
+    width:100% !important;
+    margin-left:0 !important;
+    min-height:var(--gfs-topbar-h) !important;
+    padding:10px 18px !important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean{
+    grid-column:1 !important;
+    grid-row:2 !important;
+    position:sticky !important;
+    top:var(--gfs-topbar-h) !important;
+    left:auto !important;
+    bottom:auto !important;
+    width:auto !important;
+    height:calc(100vh - var(--gfs-topbar-h)) !important;
+    display:flex !important;
+    flex-direction:column !important;
+    align-items:stretch !important;
+    gap:7px !important;
+    padding:14px 12px !important;
+    overflow-y:auto !important;
+    overflow-x:hidden !important;
+    background:linear-gradient(180deg,#061128,#04091c) !important;
+    border-right:1px solid #183160 !important;
+    border-bottom:0 !important;
+    box-shadow:12px 0 30px rgba(0,0,0,.18) !important;
+    z-index:80 !important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean button{
+    width:100% !important;
+    min-height:42px !important;
+    display:flex !important;
+    align-items:center !important;
+    justify-content:flex-start !important;
+    gap:10px !important;
+    padding:11px 13px !important;
+    border:1px solid transparent !important;
+    border-radius:13px !important;
+    border-bottom:1px solid transparent !important;
+    white-space:nowrap !important;
+    text-align:left !important;
+    font-size:13px !important;
+    font-weight:800 !important;
+    color:#a9bbd8 !important;
+    letter-spacing:.01em !important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean button.is-active{
+    background:linear-gradient(135deg,#0b2a55,#092043) !important;
+    border-color:#00b8f566 !important;
+    color:#eaf8ff !important;
+    box-shadow: inset 4px 0 0 #00b8f5, 0 10px 22px rgba(0,184,245,.08) !important;
+  }
+  .supervisor-main-content{
+    grid-column:2 !important;
+    grid-row:2 !important;
+    max-width:min(100%, 1680px) !important;
+    width:100% !important;
+    margin:0 auto !important;
+    padding:var(--gfs-web-gutter) !important;
+  }
+
+  /* Dashboard: real desktop composition instead of a long stretched stack */
+  .supervisor-dashboard-clean{
+    display:grid !important;
+    grid-template-columns:minmax(0,1.25fr) minmax(360px,.75fr) !important;
+    gap:18px !important;
+    align-items:start !important;
+  }
+  .supervisor-dashboard-clean .supervisor-command-center{
+    grid-column:1 / 2 !important;
+    margin:0 !important;
+    border-radius:var(--gfs-web-radius) !important;
+  }
+  .supervisor-dashboard-clean .supervisor-closeout-monitor{
+    grid-column:2 / 3 !important;
+    grid-row:1 / span 2 !important;
+    margin:0 !important;
+    position:sticky !important;
+    top:calc(var(--gfs-topbar-h) + 18px) !important;
+    border-radius:var(--gfs-web-radius) !important;
+  }
+  .supervisor-dashboard-clean > div:not(.supervisor-command-center):not(.supervisor-closeout-monitor){
+    grid-column:1 / -1 !important;
+    min-width:0 !important;
+  }
+  .supervisor-command-grid{
+    grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+  }
+  .supervisor-closeout-grid{
+    grid-template-columns:repeat(auto-fill,minmax(230px,1fr)) !important;
+    max-height:330px !important;
+    overflow:auto !important;
+    padding-right:4px !important;
+  }
+  .supervisor-closeout-grid button{
+    min-height:96px !important;
+    padding:12px 14px !important;
+  }
+
+  /* Route page: stable two-column work area */
+  .supervisor-route-page{
+    display:grid !important;
+    grid-template-columns:minmax(330px,430px) minmax(0,1fr) !important;
+    gap:18px !important;
+    align-items:start !important;
+  }
+  .supervisor-route-card{
+    position:sticky !important;
+    top:calc(var(--gfs-topbar-h) + 18px) !important;
+    border-radius:var(--gfs-web-radius) !important;
+  }
+  .supervisor-route-toolbar{
+    display:grid !important;
+    grid-template-columns:1fr 1fr !important;
+    gap:10px !important;
+  }
+  .supervisor-route-toolbar > button{
+    width:100% !important;
+    min-height:44px !important;
+    justify-content:center !important;
+  }
+  .supervisor-route-toolbar > div{
+    grid-column:1 / -1 !important;
+    width:100% !important;
+    max-width:none !important;
+  }
+
+  /* Technician: desktop workbench layout, not a phone layout stretched across a monitor */
+  .tech-portal-v226{
+    display:grid !important;
+    grid-template-columns:var(--gfs-web-sidebar) minmax(0,1fr) !important;
+    grid-template-rows:var(--gfs-topbar-h) 1fr !important;
+    padding-bottom:0 !important;
+  }
+  .tech-portal-v226 .tech-header{
+    grid-column:1 / -1 !important;
+    min-height:var(--gfs-topbar-h) !important;
+  }
+  .tech-portal-v226 .tech-tabs{
+    grid-column:1 !important;
+    grid-row:2 !important;
+    position:sticky !important;
+    top:var(--gfs-topbar-h) !important;
+    height:calc(100vh - var(--gfs-topbar-h)) !important;
+    flex-direction:column !important;
+    align-items:stretch !important;
+    gap:7px !important;
+    padding:14px 12px !important;
+    overflow-y:auto !important;
+    overflow-x:hidden !important;
+    background:linear-gradient(180deg,#061128,#04091c) !important;
+    border-right:1px solid #183160 !important;
+    border-bottom:0 !important;
+  }
+  .tech-portal-v226 .tech-tabs button{
+    width:100% !important;
+    justify-content:flex-start !important;
+    text-align:left !important;
+    border-radius:13px !important;
+    padding:12px 14px !important;
+    font-size:13px !important;
+  }
+  .tech-portal-v226 .tech-content{
+    grid-column:2 !important;
+    grid-row:2 !important;
+    max-width:min(100%,1500px) !important;
+    margin:0 auto !important;
+    padding:var(--gfs-web-gutter) !important;
+  }
+  .tech-portal-v226 .tech-job-list{
+    grid-template-columns:repeat(auto-fit,minmax(360px,1fr)) !important;
+    gap:16px !important;
+  }
+}
+
+/* Laptop and tablet: top navigation, centered content, no side squeeze */
+@media (min-width: 760px) and (max-width:1279px){
+  .supervisor-portal-clean{padding-left:0 !important;display:block !important;}
+  .supervisor-portal-clean .supervisor-topbar,
+  .tech-portal-v226 .tech-header{
+    min-height:58px !important;
+    padding:10px 14px !important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean,
+  .tech-portal-v226 .tech-tabs{
+    position:sticky !important;
+    top:var(--gfs-topbar-h) !important;
+    display:flex !important;
+    flex-direction:row !important;
+    gap:4px !important;
+    overflow-x:auto !important;
+    overflow-y:hidden !important;
+    padding:0 12px !important;
+    border-right:0 !important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean button,
+  .tech-portal-v226 .tech-tabs button{
+    flex:0 0 auto !important;
+    width:auto !important;
+    min-width:max-content !important;
+    white-space:nowrap !important;
+    padding:11px 13px !important;
+    border-radius:10px 10px 0 0 !important;
+  }
+  .supervisor-main-content,
+  .tech-portal-v226 .tech-content{
+    max-width:1120px !important;
+    width:100% !important;
+    margin:0 auto !important;
+    padding:16px !important;
+  }
+  .supervisor-dashboard-clean{
+    display:flex !important;
+    flex-direction:column !important;
+    gap:16px !important;
+  }
+  .supervisor-route-page{
+    display:flex !important;
+    flex-direction:column !important;
+    gap:14px !important;
+  }
+  .supervisor-command-grid{
+    grid-template-columns:repeat(auto-fit,minmax(230px,1fr)) !important;
+  }
+}
+
+/* Mobile: single column, readable taps */
+@media (max-width: 759px){
+  .supervisor-portal-clean,
+  .tech-portal-v226{
+    display:block !important;
+    padding-left:0 !important;
+  }
+  .supervisor-topbar,
+  .tech-header{
+    min-height:auto !important;
+    padding:10px !important;
+  }
+  .supervisor-main-content,
+  .tech-portal-v226 .tech-content{
+    max-width:none !important;
+    width:100% !important;
+    padding:10px !important;
+  }
+  .supervisor-command-grid,
+  .supervisor-route-page,
+  .supervisor-route-stats,
+  .tech-portal-v226 .tech-job-list{
+    display:grid !important;
+    grid-template-columns:1fr !important;
+    gap:12px !important;
+  }
+  .supervisor-closeout-grid{
+    grid-template-columns:1fr !important;
+    max-height:320px !important;
+    overflow:auto !important;
+  }
+}
+
+
+/* Dashboard desktop layout: command center + alerts side panel */
+.dashboard-command-alert-row {
+  width: 100%;
+  max-width: 100%;
+}
+
+.dashboard-command-alert-row .supervisor-command-center {
+  min-width: 0;
+}
+
+.dashboard-alerts-right {
+  min-width: 0;
+}
+
+.dashboard-alerts-right > * {
+  width: 100%;
+}
+
+@media (max-width: 1240px) {
+  .dashboard-command-alert-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .dashboard-alerts-right {
+    order: 2;
+  }
+}
+
+
+/* TECH_WORKBENCH_LAYOUT_FINAL
+   Technician portal: professional desktop workbench + clean camera modal. */
+.gfs-webcam-modal video{display:block}
+.tech-portal-v226 .tech-job-list > div{min-width:0}
+
+@media (min-width:1280px){
+  .tech-portal-v226 .tech-section-route{
+    display:grid !important;
+    grid-template-columns:minmax(330px,420px) minmax(0,1fr) !important;
+    grid-auto-flow:row !important;
+    gap:16px 18px !important;
+    align-items:start !important;
+    max-width:min(100%,1680px) !important;
+  }
+
+  .tech-portal-v226 .tech-section-route > *{
+    grid-column:1 !important;
+    min-width:0 !important;
+    margin-top:0 !important;
+    margin-bottom:0 !important;
+  }
+
+  .tech-portal-v226 .tech-section-route > *:first-child{
+    grid-column:1 / -1 !important;
+  }
+
+  .tech-portal-v226 .tech-section-route .tech-job-list{
+    grid-column:2 !important;
+    grid-row:2 / span 12 !important;
+    display:grid !important;
+    grid-template-columns:1fr !important;
+    gap:12px !important;
+    align-self:start !important;
+    min-width:0 !important;
+  }
+
+  .tech-portal-v226 .tech-section-route .tech-job-list > div{
+    border-radius:16px !important;
+    box-shadow:0 14px 30px rgba(0,0,0,.18) !important;
+  }
+
+  .tech-portal-v226 .tech-section-route > div:not(.tech-job-list){
+    border-radius:16px !important;
+  }
+}
+
+@media (min-width:760px) and (max-width:1279px){
+  .tech-portal-v226 .tech-section-route{
+    display:block !important;
+    max-width:980px !important;
+  }
+
+  .tech-portal-v226 .tech-section-route .tech-job-list{
+    display:grid !important;
+    grid-template-columns:1fr !important;
+    gap:12px !important;
+  }
+}
+
+@media (max-width:759px){
+  .tech-portal-v226 .tech-section-route{
+    display:block !important;
+  }
+
+  .tech-portal-v226 .tech-job-list{
+    grid-template-columns:1fr !important;
+    gap:10px !important;
+  }
+
+  .gfs-webcam-modal{
+    padding:8px !important;
+  }
+}
+
+
+/* CHARLIE_DO_NOT_COVER_CLOSE_DAY_FINAL
+   Charlie AI must never cover technician operational buttons like Close Day. */
+[class*="charlie" i],
+[id*="charlie" i],
+.gfs-charlie,
+.gfs-charlie-launcher,
+.gfs-charlie-bubble,
+.gfs-charlie-fab {
+  z-index: 650 !important;
+}
+
+.gfs-charlie-launcher,
+.gfs-charlie-bubble,
+.gfs-charlie-fab,
+[class*="charlie-launcher" i],
+[class*="charlie-bubble" i],
+[class*="charlie-fab" i] {
+  right: 18px !important;
+  bottom: 92px !important;
+}
+
+.tech-close-day,
+.close-day,
+button[class*="close" i],
+button[aria-label*="Close" i],
+button[title*="Close" i] {
+  position: relative;
+  z-index: 900 !important;
+}
+
+@media (max-width: 760px) {
+  .gfs-charlie-launcher,
+  .gfs-charlie-bubble,
+  .gfs-charlie-fab,
+  [class*="charlie-launcher" i],
+  [class*="charlie-bubble" i],
+  [class*="charlie-fab" i] {
+    right: 10px !important;
+    bottom: 110px !important;
+    max-width: calc(100vw - 24px) !important;
+  }
+}
+
+/* ── V25.2 responsive guardrails (tablets/phones) ─────────────────────────
+   Safe global rules only — no redesign. They stop horizontal overflow and
+   let long unbroken text (job notes, addresses in caps) wrap instead of
+   pushing cards off-screen, on any viewport. */
+html, body, #root { max-width: 100vw; overflow-x: hidden; }
+img, video, canvas, svg { max-width: 100%; height: auto; }
+button, a { touch-action: manipulation; }
+@media (max-width: 900px) {
+  /* Tablet: long tokens wrap inside cards instead of overflowing */
+  #root h1, #root h2, #root h3, #root strong, #root b { overflow-wrap: anywhere; }
+}
+@media (max-width: 640px) {
+  /* Phone: slightly larger tap targets on dense chip rows */
+  #root { -webkit-text-size-adjust: 100%; }
+}
+
+/* ── V26 Universal responsive: iPhone safe areas, tablet, desktop ──────────
+   Ensures the PWA adapts cleanly to every device class without distortion. */
+
+/* iPhone notch / Dynamic Island safe areas */
+@supports (padding: env(safe-area-inset-top)) {
+  .supervisor-topbar,
+  .tech-portal-v226 .tech-header {
+    padding-top: max(10px, env(safe-area-inset-top)) !important;
+  }
+  .supervisor-portal-clean,
+  .tech-portal-v226 {
+    padding-bottom: env(safe-area-inset-bottom) !important;
+  }
+  .supervisor-tabbar-clean,
+  .tech-portal-v226 .tech-tabs {
+    padding-bottom: max(6px, env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ── Phone (≤480px): compact, thumb-friendly ── */
+@media (max-width: 480px) {
+  .supervisor-portal-clean .supervisor-topbar,
+  .tech-portal-v226 .tech-header {
+    padding: 8px 10px !important;
+    gap: 6px !important;
+  }
+  .supervisor-portal-clean .supervisor-topbar > *,
+  .tech-portal-v226 .tech-header > * {
+    font-size: 12px !important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean button,
+  .tech-portal-v226 .tech-tabs button {
+    min-width: 100px !important;
+    font-size: 11px !important;
+    padding: 9px 10px !important;
+    min-height: 40px !important;
+  }
+  .supervisor-command-center,
+  .supervisor-route-card,
+  .tech-portal-v226 .tech-section-route > div {
+    border-radius: 12px !important;
+    padding: 12px !important;
+  }
+  .supervisor-command-grid {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+  .supervisor-closeout-grid {
+    grid-template-columns: 1fr !important;
+    max-height: 280px !important;
+  }
+  .tech-portal-v226 .tech-job-list {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+  /* Buttons: minimum 44px tap target */
+  .tech-portal-v226 button,
+  .supervisor-portal-clean button {
+    min-height: 40px;
+  }
+  /* PIN change modal: full width on phone */
+  .tech-portal-v226 [style*="maxWidth:380"] {
+    max-width: calc(100vw - 24px) !important;
+  }
+}
+
+/* ── Small tablet / large phone (481px–759px): 2-column where useful ── */
+@media (min-width: 481px) and (max-width: 759px) {
+  .supervisor-command-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .supervisor-closeout-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .tech-portal-v226 .tech-job-list {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ── Tablet landscape (760px–1023px): use space, stay single-column jobs ── */
+@media (min-width: 760px) and (max-width: 1023px) {
+  .supervisor-command-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .supervisor-closeout-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)) !important;
+  }
+  .tech-portal-v226 .tech-job-list {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ── Desktop (≥1280px): multi-column job lists, wide dashboard ── */
+@media (min-width: 1280px) {
+  .tech-portal-v226 .tech-job-list {
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)) !important;
+    gap: 14px !important;
+  }
+}
+
+/* ── Ultra-wide (≥1920px): cap content width for readability ── */
+@media (min-width: 1920px) {
+  .supervisor-main-content,
+  .tech-portal-v226 .tech-content {
+    max-width: 1600px !important;
+    margin: 0 auto !important;
+  }
+}
+
+/* ── Landscape phone: tight vertical space ── */
+@media (max-height: 480px) and (orientation: landscape) {
+  .supervisor-topbar,
+  .tech-portal-v226 .tech-header {
+    padding: 6px 10px !important;
+    min-height: 44px !important;
+  }
+  .supervisor-portal-clean .supervisor-tabbar-clean,
+  .tech-portal-v226 .tech-tabs {
+    top: 44px !important;
+  }
+}
+
+/* ── Prevent text size adjust on rotation ── */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+/* ── Smooth font rendering on iOS ── */
+body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+/* ── Login page responsive ── */
+.login-region-switch {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 480px) {
+  .login-region-switch button {
+    flex: 1 1 calc(50% - 4px) !important;
+    min-width: 0 !important;
+  }
+}

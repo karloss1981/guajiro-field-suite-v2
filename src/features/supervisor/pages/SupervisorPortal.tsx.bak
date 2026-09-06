@@ -1,0 +1,1467 @@
+// @ts-nocheck
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { sb, SUPABASE_CONFIGURED } from '../../../config/supabase';
+import { C } from '../../../config/theme';
+import { JOB_NOTES_ES, JOB_NOTES_EN } from '../../../config/regions';
+import { NOTE_TYPES, REGION_LABELS, REGION_PINS, T, getTechName, getTechsByRegion } from '../../../legacy/data';
+import { buildHash, useHashTab } from '../../../legacy/routing';
+import { useInactivityTimer } from '../../../legacy/hooks';
+import { LangToggle, ReportLangModal, SessionWarning, Stat, Toast } from '../../../legacy/ui';
+import { JobPhotoGallery } from '../../technician/components/TechnicianComponents';
+import { createAuditLog } from '../../../services/audit.service';
+import { SECURITY_PHRASES, isAdminRole, isReadOnlyRole } from '../../../config/access';
+import { AuditTrailView, CompletedJobsTab, DatabaseView, EarningsView, JobsMapView, RouteArchive, SearchTab, TechActivityView, TechDayBoard } from '../components/SupervisorComponents';
+import { WeatherLivePanel } from '../../../shared/components/WeatherLivePanel';
+import { addAppNotification, notifyWithSound } from '../../../services/notification.service';
+import { isFieldTrackingWindow } from '../../../config/constants';
+import { saveDailyRouteSnapshot, savePermanentRouteArchive } from '../../../services/routeArchive.service';
+import { parseRouteImport, type RouteImportPreview } from '../../../services/routeImport.service';
+import { getDefaultImportRouteDate, getRouteUploadWindowLabel } from '../../../services/routeDate.service';
+import CustomerRecoveryQueue from '../../customers/components/CustomerRecoveryQueue';
+import SupervisorCloseoutMonitor from '../components/SupervisorCloseoutMonitor';
+import { adminClearTechnicianPin, adminSetTechnicianPin, reauthenticateWithPassword, verifyRoleSecurityPin } from '../../../services/security.service';
+import { addOrRefreshNotDonePool, reconcileNotDonePoolWithRoute, resolveNotDonePool } from '../../../services/notDonePool.service';
+import NotDonePoolView from '../components/NotDonePoolView';
+import AdminConsole from '../components/AdminConsole';
+import SuperAdminDeleteGate from '../../../components/SuperAdminDeleteGate';
+import { checkDestructiveAction, logDestructiveActionSuccess } from '../../../services/actionGuard.service';
+import { deleteRouteAsSuperAdmin } from '../../../services/routeDelete.service';
+
+const SupervisorWeeklyChart = lazy(() => import('../components/SupervisorWeeklyChart'));
+const OperationsCenter = lazy(() => import('../../operations/OperationsCenter'));
+const DispatchPage = lazy(() => import('../../dispatch/pages/DispatchPage'));
+const SecurityAdminPage = lazy(() => import('../../auth/pages/SecurityAdminPage'));
+const RouteIntelligencePage = lazy(() => import('../../routing/pages/RouteIntelligencePage'));
+
+const ModuleLoader = () => <div style={{background:'#0b1830',border:'1px solid #162e58',borderRadius:12,padding:24,color:'#8da4c9',textAlign:'center'}}>Loading module…</div>;
+
+const reporting = () => import('../../../legacy/reporting');
+const generateRoutePDFLazy = async (...args:any[]) => (await reporting()).generateRoutePDF(...args);
+const generateRouteExcelLazy = async (...args:any[]) => (await reporting()).generateRouteExcel(...args);
+const generateJobPDFLazy = async (...args:any[]) => (await reporting()).generateJobPDF(...args);
+const generateJobExcelLazy = async (...args:any[]) => (await reporting()).generateJobExcel(...args);
+const generateNotDoneExcelLazy = async (...args:any[]) => (await reporting()).generateNotDoneExcel(...args);
+
+const CITY_EMOJI_R = ['🔵','🟡','🟢','🟣','🟠','🔴','⚪','🟤'];
+function reportsGroupByCity(list){const map=new Map();for(const r of list){const city=String(r.zone||r.city||'SIN CIUDAD').toUpperCase().trim();if(!map.has(city))map.set(city,[]);map.get(city).push(r);}return Array.from(map.entries()).sort((a,b)=>a[0].localeCompare(b[0]));}
+function reportsBuildTxt(list){const title='Not Done Report — '+new Date().toLocaleDateString('en-CA');const out=[title,'Total: '+list.length+' trabajos',''];reportsGroupByCity(list).forEach(([city,rows],i)=>{out.push(CITY_EMOJI_R[i%CITY_EMOJI_R.length]+' '+city);rows.forEach(r=>{out.push((r.job_id||'s/n')+' – '+(r.address||'s/dirección')+' → '+(r.reason||'Sin razón'));out.push('  ↳ Tech '+(r.tech_id||'s/n')+' – '+(r.tech_name||'')+(r.notes?'  ·  '+r.notes:''));});out.push('');});return out.join('\n');}
+async function reportsBuildDocx(list,supervisor){const{Document,Packer,Paragraph,TextRun,HeadingLevel,AlignmentType}=await import('docx');const children=[];const title='Not Done Report — '+new Date().toLocaleDateString('en-CA');children.push(new Paragraph({text:title,heading:HeadingLevel.HEADING_1,alignment:AlignmentType.CENTER}));children.push(new Paragraph({children:[new TextRun({text:'Total: '+list.length+' trabajos',bold:true,size:20})]}));children.push(new Paragraph({text:''}));reportsGroupByCity(list).forEach(([city,rows],i)=>{children.push(new Paragraph({children:[new TextRun({text:CITY_EMOJI_R[i%CITY_EMOJI_R.length]+' '+city,bold:true,size:26,color:'00b8f5'})],spacing:{before:200,after:80}}));rows.forEach(r=>{children.push(new Paragraph({children:[new TextRun({text:(r.job_id||'s/n')+' ',bold:true,size:22,color:'222222'}),new TextRun({text:'– '+(r.address||'s/dirección')+' ',size:22,color:'222222'}),new TextRun({text:'→ '+(r.reason||'Sin razón'),size:22,color:'555555'})]}));children.push(new Paragraph({children:[new TextRun({text:'     ↳ Tech '+(r.tech_id||'s/n')+' – '+(r.tech_name||'')+(r.notes?'  ·  '+r.notes:''),size:18,color:'888888'})]}));});});const doc=new Document({sections:[{children}]});return await Packer.toBlob(doc);}
+function reportsDownload(blob,filename){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(url),1000);}
+
+/* ── SUPERVISOR PORTAL v4 ── */
+function SupervisorPortal({onLogout,onSessionExpired,lang,setLang,region,auth,accessRole}:{onLogout:()=>void,onSessionExpired?:()=>void,lang:string,setLang:(l:string)=>void,region:string,auth?:any,accessRole?:string}){
+  const t=(T as any)[lang]||T.en;
+  const regionInfo=REGION_LABELS[region]||REGION_LABELS.miami;
+  const effectiveRole=accessRole||auth?.accessRole||'supervisor';
+  const secureAuth=auth?.authMode==='supabase';
+  const isViewer=isReadOnlyRole(effectiveRole);
+  const isAdmin=isAdminRole(effectiveRole);
+  const adminPin=REGION_PINS[region] || ''; // legacy fallback only; secure sessions verify hashed PIN through Supabase
+  const actorName=auth?.user?.name || auth?.tech?.name || auth?.tech?.id || effectiveRole;
+  const regionTechs=getTechsByRegion(region);
+  const[activeTab,setActiveTabRaw,hashSub]=useHashTab('supervisor', region, 'dashboard');
+  const setActiveTab=useCallback((tab:string,sub?:string)=>setActiveTabRaw(tab,sub),[setActiveTabRaw]);
+  const[routes,setRoutes]=useState([]);
+  const[reports,setReports]=useState([]);
+  const[notes,setNotes]=useState([]);
+  const[techLocations,setTechLocations]=useState([]);
+  const[toast,setToast]=useState(null);
+  const[importError,setImportError]=useState<string|null>(null);
+  const[importing,setImporting]=useState(false);
+  const[weeklyData,setWeeklyData]=useState([]);
+  const[reassignJob,setReassignJob]=useState(null);
+  const[reassignTech,setReassignTech]=useState('');
+  const[bulkReassignFrom,setBulkReassignFrom]=useState(null);
+  const[bulkReassignTo,setBulkReassignTo]=useState('');
+  const[addJobForm,setAddJobForm]=useState({tech_id:'',job_id:'',address:'',city:'',phone:'',type:'JS:BURY COAX'});
+  const[noteForm,setNoteForm]=useState({type:'recommendation',content:'',tech_id:''});
+  const routeFocusRaw=activeTab==='route'&&hashSub?decodeURIComponent(String(hashSub)):'';
+  const routeFocusTech=routeFocusRaw?routeFocusRaw.split('~')[0]:'';
+  const routeFocusJob=routeFocusRaw&&routeFocusRaw.includes('~')?routeFocusRaw.split('~').slice(1).join('~'):'';
+  const[expandedTech,setExpandedTechState]=useState<string|null>(()=>activeTab==='route'?(routeFocusTech||hashSub):null);
+  const setExpandedTech=useCallback((tid:string|null)=>{
+    setExpandedTechState(tid);
+    window.history.replaceState(null,'',buildHash('supervisor',region,activeTab,tid||undefined));
+  },[region,activeTab]);
+  useEffect(()=>{
+    if(activeTab==='route'&&routeFocusTech)setExpandedTechState(routeFocusTech);
+  },[activeTab,routeFocusTech]);
+  useEffect(()=>{
+    if(activeTab!=='route'||!routeFocusJob)return;
+    const id=`route-job-${CSS.escape(routeFocusJob)}`;
+    const el=document.getElementById(id);
+    if(el)setTimeout(()=>el.scrollIntoView({behavior:'smooth',block:'center'}),140);
+  },[activeTab,routeFocusJob,routes.length]);
+  const[showReportLang,setShowReportLang]=useState(false);
+  const[reportLangType,setReportLangType]=useState('notdone');
+  const openReportLang=(type:string)=>{setReportLangType(type);setShowReportLang(true);};
+  const[supPhotos,setSupPhotos]=useState<any[]>([]);
+  const{secondsLeft:sessLeft,isWarning:sessWarn}=useInactivityTimer(onSessionExpired||onLogout);
+  const[techNotes,setTechNotes]=useState<any[]>([]);
+  const fileRef=useRef<any>(null);
+  const today=new Date().toLocaleDateString('en-CA');
+  const routeDateCacheKey=`gfs_supervisor_route_date_${region}`;
+  const[importRouteDate,setImportRouteDate]=useState(()=>localStorage.getItem(routeDateCacheKey)||getDefaultImportRouteDate());
+  const routeUploadWindowLabel=getRouteUploadWindowLabel(lang);
+  const routeCacheKey=(date=importRouteDate)=>`gfs_supervisor_routes_${region}_${date}`;
+  const normalizeRouteRows=(rows:any[],date=importRouteDate)=>rows.map((job:any,index:number)=>({
+    ...job,
+    id:job.id||`local-${date}-${job.tech_id||'tech'}-${job.job_id||index}`,
+    date:job.date||date,
+    region:job.region||region,
+    status:job.status||'pending',
+    order_num:Number.isFinite(Number(job.order_num))?Number(job.order_num):index+1,
+  }));
+  const readRouteCache=(date=importRouteDate)=>{
+    try{
+      const cached=JSON.parse(localStorage.getItem(routeCacheKey(date))||'null');
+      return Array.isArray(cached)?normalizeRouteRows(cached,date):[];
+    }catch{return [];}
+  };
+  const writeRouteCache=(date:string,rows:any[])=>{
+    try{localStorage.setItem(routeCacheKey(date),JSON.stringify(normalizeRouteRows(rows,date)));}catch{}
+  };
+  const selectRouteDate=(date:string)=>{
+    setImportRouteDate(date);
+    try{localStorage.setItem(routeDateCacheKey,date);}catch{}
+  };
+  const showT=(m:string)=>{setToast(m);setTimeout(()=>setToast(null),3500);};
+  const TECHNICIAN_PIN_STORAGE_KEY = 'guajiro_technician_pins_v1';
+  const readLocalTechnicianPins = () => {
+    try { return JSON.parse(localStorage.getItem(TECHNICIAN_PIN_STORAGE_KEY) || '{}') || {}; }
+    catch { return {}; }
+  };
+  const writeLocalTechnicianPins = (pins: Record<string,string>) => {
+    try { localStorage.setItem(TECHNICIAN_PIN_STORAGE_KEY, JSON.stringify(pins)); } catch {}
+  };
+  const saveLocalTechnicianPin = (techId:string, pin:string) => {
+    const pins = readLocalTechnicianPins();
+    pins[String(techId)] = pin;
+    writeLocalTechnicianPins(pins);
+  };
+
+  // PIN management
+  const[dbTechs,setDbTechs]=useState<any[]>([]);
+  const[pinEditing,setPinEditing]=useState<string|null>(null);
+  const[pinInput,setPinInput]=useState('');
+  const[pinSaving,setPinSaving]=useState(false);
+  const statusSoundRef=useRef<Record<string,string>>({});
+  const[showDeleteRouteGate,setShowDeleteRouteGate]=useState(false);
+  const[deletingRoute,setDeletingRoute]=useState(false);
+  const[pendingImportFile,setPendingImportFile]=useState<File|null>(null);
+  const[importPreview,setImportPreview]=useState<RouteImportPreview|null>(null);
+  const[publishingImport,setPublishingImport]=useState(false);
+  const[editJob,setEditJob]=useState<any|null>(null);
+  const[editForm,setEditForm]=useState<any>({});
+  const[editSaving,setEditSaving]=useState(false);
+  const[deleteJobTarget,setDeleteJobTarget]=useState<any|null>(null);
+  const[deleteJobPin,setDeleteJobPin]=useState('');
+  const[deleteJobPassword,setDeleteJobPassword]=useState('');
+  const[deleteJobPhrase,setDeleteJobPhrase]=useState('');
+
+  const loadDbTechs=useCallback(async()=>{
+    if(!SUPABASE_CONFIGURED || !secureAuth){
+      const localPins=readLocalTechnicianPins();
+      setDbTechs(regionTechs.map((tech:any)=>({...tech,active:true,pin:localPins[String(tech.id)]||null})));
+      return;
+    }
+    const{data}=await sb.from('technicians').select('*').eq('region',region).order('id');
+    const dbRows=(data||[]) as any[];
+    const dbById=new Map(dbRows.map((row:any)=>[String(row.id),row]));
+    const normalized=regionTechs.map((tech:any)=>{
+      const dbTech=dbById.get(String(tech.id))||{};
+      return {...dbTech,id:tech.id,name:tech.name,region:tech.region,active:dbTech.active??true,pin:dbTech.pin??null};
+    });
+    setDbTechs(normalized);
+    if(data){
+      const needsSync=normalized.some((tech:any)=>{
+        const dbTech=dbById.get(String(tech.id));
+        return !dbTech || dbTech.name!==tech.name || dbTech.region!==tech.region || dbTech.active===undefined || dbTech.active===null;
+      });
+      if(needsSync){
+        sb.from('technicians').upsert(normalized,{onConflict:'id'}).then(({error})=>{
+          if(error) console.warn('Technician roster sync skipped:',error.message);
+        });
+      }
+    }
+  },[region,regionTechs,secureAuth]);
+  const savePin=async(techId:string)=>{
+    const cleanPin=String(pinInput||'').trim();
+    if(!/^\d{4,6}$/.test(cleanPin)){showT('⚠️ PIN debe ser 4-6 dígitos');return;}
+    setPinSaving(true);
+    try{
+      if(!SUPABASE_CONFIGURED){
+        saveLocalTechnicianPin(techId,cleanPin);
+        showT(`✅ ${t.pinSaved} — Tech #${techId}`);
+      }else{
+        // Try the RPC first (sets pin_hash + plaintext). If the RPC fails
+        // (e.g. supervisor has no DB-level role, or function is missing),
+        // fall back to a direct table update — RLS allows anon updates.
+        let savedToDb = false;
+        if(secureAuth){
+          try {
+            await adminSetTechnicianPin(techId,cleanPin);
+            savedToDb = true;
+          } catch(rpcErr) {
+            console.warn('adminSetTechnicianPin RPC failed, falling back to direct update:', rpcErr);
+          }
+        }
+        if(!savedToDb){
+          const {error:updErr}=await sb.from('technicians').update({pin:cleanPin}).eq('id',techId);
+          if(updErr) throw updErr;
+        }
+        // Also save locally so this browser remembers it immediately
+        saveLocalTechnicianPin(techId,cleanPin);
+        showT(`✅ ${t.pinSaved} — Tech #${techId}`);
+      }
+      createAuditLog({ action:'pin_updated', entity:'technician', entityId:techId, metadata:{ region, actorRole:effectiveRole, actorName, targetTech:techId, summary:`PIN updated for tech ${techId}` } }).catch(()=>{});
+      setPinEditing(null);
+      setPinInput('');
+      loadDbTechs();
+    }catch(error:any){
+      showT('❌ '+(error?.message||String(error)));
+    }finally{
+      setPinSaving(false);
+    }
+  };
+  const deletePin=async(techId:string)=>{
+    setPinSaving(true);
+    try{
+      if(!SUPABASE_CONFIGURED){
+        const pins=readLocalTechnicianPins();
+        delete pins[String(techId)];
+        writeLocalTechnicianPins(pins);
+      }else{
+        let cleared = false;
+        if(secureAuth){
+          try { await adminClearTechnicianPin(techId); cleared = true; } catch(rpcErr) { console.warn('adminClearTechnicianPin RPC failed, falling back to direct update:', rpcErr); }
+        }
+        if(!cleared){
+          const {error}=await sb.from('technicians').update({pin:null,pin_hash:null}).eq('id',techId);
+          if(error) throw error;
+        }
+        const pins=readLocalTechnicianPins();
+        delete pins[String(techId)];
+        writeLocalTechnicianPins(pins);
+      }
+      showT(`🗑 PIN eliminado — Tech #${techId}`);
+      createAuditLog({ action:'pin_deleted', entity:'technician', entityId:techId, metadata:{ region, actorRole:effectiveRole, actorName, targetTech:techId, summary:`PIN deleted for tech ${techId}` } }).catch(()=>{});
+      loadDbTechs();
+    }catch(error:any){
+      showT('❌ '+(error?.message||String(error)));
+    }finally{
+      setPinSaving(false);
+    }
+  };
+  const autoAssignPins=async()=>{
+    if(secureAuth&&SUPABASE_CONFIGURED){showT(lang==='es'?'🔐 Auto PIN desactivado en modo seguro. Crea PINs individualmente para no perder control.':'🔐 Auto PIN is disabled in secure mode. Create PINs individually to avoid losing control.');return;}
+    const localPins=readLocalTechnicianPins();
+    const techsWithoutPin=regionTechs.filter(tt=>!localPins[String(tt.id)]&&!(dbTechs as any[]).find((dt:any)=>String(dt.id)===String(tt.id)&&dt.pin));
+    if(techsWithoutPin.length===0){showT('✅ Todos los técnicos ya tienen PIN');return;}
+    setPinSaving(true);
+    try{
+      const rand4=()=>String(Math.floor(1000+Math.random()*9000));
+      const next={...localPins};
+      const updates:any[]=[];
+      techsWithoutPin.forEach(tt=>{ const p=rand4(); next[String(tt.id)]=p; updates.push({id:tt.id,pin:p}); });
+      writeLocalTechnicianPins(next);
+      // Also persist to database so technicians on other devices can log in
+      if(SUPABASE_CONFIGURED){
+        for(const u of updates){
+          await sb.from('technicians').update({pin:u.pin}).eq('id',u.id).catch(()=>{});
+        }
+      }
+      showT(`✅ ${techsWithoutPin.length} PINs asignados`);
+      loadDbTechs();
+      createAuditLog({ action:'pins_auto_assigned', entity:'technicians', metadata:{ region, actorRole:effectiveRole, actorName, count:techsWithoutPin.length, summary:`Auto-assigned ${techsWithoutPin.length} technician PINs` } }).catch(()=>{});
+    }finally{
+      setPinSaving(false);
+    }
+  };
+
+  // NOTE: validateAdminPin remains used ONLY by the single-job delete flow.
+  // Whole-route delete no longer accepts a PIN — see doClearRoute / SuperAdminDeleteGate.
+  const validateAdminPin=async(pinValue:string,passwordValue='')=>{
+    if(secureAuth){
+      try{
+        if(!passwordValue)throw new Error(lang==='es'?'La contraseña de la cuenta es obligatoria.':'Account password is required.');
+        await reauthenticateWithPassword(passwordValue);
+        return await verifyRoleSecurityPin({role:'admin',region,pin:pinValue});
+      }catch(error:any){showT(`❌ ${error?.message||'Security verification failed'}`);return false;}
+    }
+    return Boolean(adminPin)&&pinValue===adminPin;
+  };
+
+
+  // ── Auto-snapshot: persist route state to DB every time routes change ──
+  const autoSnapshotRef=useRef<ReturnType<typeof setTimeout>|null>(null);
+  const autoSnapshotErrorRef=useRef('');
+  useEffect(()=>{
+    if(!routes.length)return;
+    if(autoSnapshotRef.current)clearTimeout(autoSnapshotRef.current);
+    autoSnapshotRef.current=setTimeout(async()=>{
+      try{
+        await saveDailyRouteSnapshot(region,importRouteDate||today,routes);
+        autoSnapshotErrorRef.current='';
+      }catch(error:any){
+        const message=error?.message||String(error);
+        console.warn('auto-snapshot failed:',error);
+        if(autoSnapshotErrorRef.current!==message){
+          autoSnapshotErrorRef.current=message;
+          addAppNotification({kind:'info',title:lang==='es'?'No se pudo archivar la ruta':'Route archive failed',body:message,tag:`route-archive-error-${region}-${importRouteDate||today}`});
+        }
+      }
+    },10000);
+    return()=>{if(autoSnapshotRef.current)clearTimeout(autoSnapshotRef.current);};
+  },[routes,region,today,importRouteDate]);
+
+  const[showClearConfirm,setShowClearConfirm]=useState(false);
+  const doClearRoute=async()=>{
+    // Hard guard: a Super Admin session is never optional here — PIN/legacy
+    // sessions can never pass checkDestructiveAction.
+    const gate=checkDestructiveAction(auth,lang);
+    if(!gate.allowed){
+      setShowClearConfirm(false);
+      setShowDeleteRouteGate(false);
+      showT(`🔒 ${gate.message}`);
+      return;
+    }
+    setShowClearConfirm(false);
+    try{
+      const clearDate=importRouteDate||today;
+      const nd=routes.filter((r:any)=>['notdone','not_completed'].includes(String(r.status)));
+      await saveDailyRouteSnapshot(region,clearDate,routes);
+      const permanent=await savePermanentRouteArchive(region,clearDate,routes);
+      if(permanent.warning)addAppNotification({kind:'info',title:'Permanent archive warning',body:permanent.warning,tag:`permanent-archive-${region}-${today}`});
+      if(nd.length>0){
+        const toCancel=nd.map((r:any)=>({region,job_id:r.job_id,address:r.address,city:r.city,phone:r.phone,type:r.type,reason:r.reason||'',notes:r.job_note||'',tech_id:r.tech_id,tech_name:'',source_route_date:clearDate,zone:r.zip||'',status:'cancelled'}));
+        for(let ci=0;ci<toCancel.length;ci+=50){
+          const result=await sb.from('cancelled_jobs').insert(toCancel.slice(ci,ci+50));
+          if(result.error)throw result.error;
+        }
+      }
+      const deletion=await deleteRouteAsSuperAdmin(region,clearDate);
+      if(deletion.warning)addAppNotification({kind:'info',title:'V25.1 migration pending',body:deletion.warning,tag:`route-delete-fallback-${region}-${today}`});
+      showT(lang==='es'?'✅ Ruta verificada, archivada y borrada':'✅ Route verified, archived and cleared');
+      addAppNotification({kind:'info',title:lang==='es'?'Ruta archivada':'Route archived',body:`${clearDate} · ${routes.length} jobs · ${region.toUpperCase()}`,tag:`route-archived-${region}-${today}`});
+      logDestructiveActionSuccess({ auth, lang, action:'route_delete', entity:'route', entityId:`${region}:${clearDate}`, metadata:{ region, actorRole:effectiveRole, actorName, date:clearDate, count:routes.length, summary:`Route cleared for ${clearDate}` } });
+      try{localStorage.removeItem(routeCacheKey(clearDate));}catch{}
+      setRoutes([]);
+      setShowDeleteRouteGate(false);
+      loadAll(clearDate);
+    }catch(error:any){
+      const message=error?.message||String(error);
+      showT(`❌ ${message}`);
+      addAppNotification({kind:'info',title:lang==='es'?'No se borró la ruta':'Route was not cleared',body:`Archive verification failed: ${message}`,tag:`route-clear-blocked-${region}-${today}`});
+      throw error;
+    }
+  };
+
+  const loadWeekly=useCallback(async()=>{
+    const from=new Date(Date.now()-6*86400000).toLocaleDateString('en-CA');
+    const{data}=await sb.from('routes').select('date,status').gte('date',from).eq('region',region);
+    if(!data)return;
+    const byDate={};
+    for(let i=6;i>=0;i--){
+      const d=new Date(Date.now()-i*86400000).toLocaleDateString('en-CA');
+      byDate[d]={date:d.slice(5),done:0,notdone:0,pending:0};
+    }
+    data.forEach(r=>{if(byDate[r.date])byDate[r.date][r.status]=(byDate[r.date][r.status]||0)+1;});
+    setWeeklyData(Object.values(byDate));
+  },[region]);
+
+  const doReassign=async()=>{
+    if(!reassignJob||!reassignTech)return;
+    const{error}=await sb.from('routes').update({tech_id:reassignTech}).eq('id',reassignJob.id);
+    if(error){showT('❌ '+error.message);return;}
+    const previousTech=reassignJob?.tech_id;
+    const targetTech=reassignTech;
+    const targetJob={...reassignJob};
+    setReassignJob(null);setReassignTech('');
+    await loadAll();
+    createAuditLog({ action:'route_reassigned', entity:'route', entityId:targetJob?.id, metadata:{ region, actorRole:effectiveRole, actorName, fromTech:previousTech, targetTech, job_id:targetJob?.job_id, summary:`Job ${targetJob?.job_id||''} moved from ${previousTech||'-'} to ${targetTech}` } }).catch(()=>{});
+    showT(`✅ Reasignado a ${getTechName(targetTech)}`);
+  };
+
+  const doBulkReassign=async()=>{
+    if(!bulkReassignFrom||!bulkReassignTo)return;
+    const{error}=await sb.from('routes').update({tech_id:bulkReassignTo}).eq('tech_id',bulkReassignFrom).eq('date',importRouteDate);
+    if(error){showT('❌ '+error.message);return;}
+    const count=routes.filter(r=>r.tech_id===bulkReassignFrom).length;
+    setBulkReassignFrom(null);setBulkReassignTo('');
+    await loadAll();
+    createAuditLog({ action:'route_reassigned', entity:'route', metadata:{ region, actorRole:effectiveRole, actorName, fromTech:bulkReassignFrom, targetTech:bulkReassignTo, bulk:true, count, summary:`Bulk reassign ${count} jobs from ${bulkReassignFrom} to ${bulkReassignTo}` } }).catch(()=>{});
+    showT(`✅ ${count} ${lang==='es'?'trabajos reasignados a':'jobs reassigned to'} ${getTechName(bulkReassignTo)}`);
+  };
+
+  const reopenJob=async(job:any)=>{
+    const{error}=await sb.from('routes').update({status:'pending',reason:null,job_note:null,pay_code:null,pay_total:null}).eq('id',job.id);
+    if(error){showT('❌ '+error.message);return;}
+    await sb.from('not_done_reports').update({status:'reopened'}).eq('tech_id',job.tech_id).eq('job_id',job.job_id||'').eq('date',job.date||importRouteDate).catch(()=>{});
+    await loadAll();
+    createAuditLog({ action:'job_reopened', entity:'route', entityId:job.id, metadata:{ region, actorRole:effectiveRole, actorName, job_id:job.job_id, tech_id:job.tech_id, previousStatus:job.status, summary:`Job ${job.job_id||''} reopened by ${actorName}` } }).catch(()=>{});
+    showT(`✅ ${lang==='es'?'Trabajo reabierto':'Job reopened'}`);
+  };
+
+  const openEditJob=(job:any)=>{
+    if(isViewer)return;
+    setEditJob(job);
+    setEditForm({
+      date:job.date||today, tech_id:job.tech_id||'', job_id:job.job_id||'',
+      address:job.address||'', city:job.city||'', zip:job.zip||'', phone:job.phone||'',
+      type:job.type||'JS:BURY COAX', status:job.status||'pending',
+      pay_code:job.pay_code||'', pay_total:job.pay_total||0,
+      reason:job.reason||'', job_note:job.job_note||'', order_num:job.order_num||0,
+    });
+  };
+
+  const syncJobOutcomeArchives=async(job:any, after:any)=>{
+    await sb.from('completed_jobs').delete().eq('route_id',job.id);
+    if(after.status==='done'){
+      await sb.from('completed_jobs').insert({
+        route_id:job.id, tech_id:after.tech_id, tech_name:getTechName(after.tech_id),
+        job_id:after.job_id, address:after.address, city:after.city, phone:after.phone,
+        type:after.type, pay_code:after.pay_code, pay_total:Number(after.pay_total)||0,
+        job_note:after.job_note||'', zip:after.zip||'', date:after.date, region,
+      });
+      await sb.from('not_done_reports').update({status:'superseded'}).eq('job_id',after.job_id).eq('tech_id',after.tech_id).eq('date',after.date);
+      await resolveNotDonePool(after,'completed',actorName,'Completed or corrected by supervisor/admin').catch(console.warn);
+    }else if(after.status==='notdone'){
+      await sb.from('not_done_reports').update({status:'superseded'}).eq('job_id',after.job_id).eq('tech_id',after.tech_id).eq('date',after.date);
+      await resolveNotDonePool(after,'completed',actorName,'Completed or corrected by supervisor/admin').catch(console.warn);
+      await sb.from('not_done_reports').insert({
+        date:after.date, tech_id:after.tech_id, tech_name:getTechName(after.tech_id),
+        job_id:after.job_id, address:after.address, reason:after.reason||'Not completed',
+        notes:after.job_note||'', status:'pending', zone:after.zip||'', region,
+      });
+      await addOrRefreshNotDonePool({...after,region},actorName).catch(console.warn);
+    }else{
+      await sb.from('not_done_reports').update({status:'reopened'}).eq('job_id',job.job_id||after.job_id).eq('date',job.date||after.date);
+    }
+  };
+
+  const saveJobEdits=async()=>{
+    if(!editJob||isViewer)return;
+    if(!editForm.tech_id||!editForm.job_id||!editForm.address){showT(lang==='es'?'⚠️ Técnico, Job ID y dirección son requeridos':'⚠️ Technician, Job ID and address are required');return;}
+    setEditSaving(true);
+    const before={...editJob};
+    const after={
+      date:editForm.date, tech_id:String(editForm.tech_id).trim(), job_id:String(editForm.job_id).trim(),
+      address:String(editForm.address).trim(), city:String(editForm.city||'').trim(), zip:String(editForm.zip||'').trim(),
+      phone:String(editForm.phone||'').replace(/\D/g,'').slice(-10), type:editForm.type||'JS:BURY COAX',
+      status:editForm.status, pay_code:editForm.status==='done'?String(editForm.pay_code||'').trim():null,
+      pay_total:editForm.status==='done'?(Number(editForm.pay_total)||0):0,
+      reason:editForm.status==='notdone'?String(editForm.reason||'').trim():null,
+      job_note:String(editForm.job_note||'').trim(), order_num:Number(editForm.order_num)||0,
+      region,
+    };
+    const{error}=await sb.from('routes').update(after).eq('id',editJob.id);
+    if(error){setEditSaving(false);showT('❌ '+error.message);return;}
+    await syncJobOutcomeArchives(editJob,after);
+    createAuditLog({action:'job_edited',entity:'route',entityId:editJob.id,metadata:{region,actorRole:effectiveRole,actorName,job_id:after.job_id,before,after,summary:`Job ${after.job_id} edited by ${actorName}`}}).catch(()=>{});
+    setEditSaving(false);setEditJob(null);setEditForm({});
+    await loadAll();
+    showT(lang==='es'?'✅ Trabajo actualizado':'✅ Job updated');
+  };
+
+  const confirmDeleteJob=async()=>{
+    if(!deleteJobTarget||!isAdmin)return;
+    if(!(await validateAdminPin(deleteJobPin,deleteJobPassword))){showT(lang==='es'?'❌ PIN de admin incorrecto':'❌ Incorrect admin PIN');return;}
+    if(deleteJobPhrase.trim().toUpperCase()!=='DELETE JOB'){showT(lang==='es'?'❌ Escribe DELETE JOB':'❌ Type DELETE JOB');return;}
+    const deleted={...deleteJobTarget};
+    const{error}=await sb.from('routes').delete().eq('id',deleteJobTarget.id);
+    if(error){showT('❌ '+error.message);return;}
+    await sb.from('completed_jobs').delete().eq('route_id',deleteJobTarget.id);
+    await sb.from('not_done_reports').update({status:'deleted'}).eq('job_id',deleteJobTarget.job_id).eq('date',deleteJobTarget.date);
+    createAuditLog({action:'route_job_deleted',entity:'route',entityId:deleteJobTarget.id,metadata:{region,actorRole:effectiveRole,actorName,job_id:deleteJobTarget.job_id,deleted,summary:`Job ${deleteJobTarget.job_id} deleted from route by ${actorName}`}}).catch(()=>{});
+    setDeleteJobTarget(null);setDeleteJobPin('');setDeleteJobPassword('');setDeleteJobPhrase('');
+    await loadAll();
+    showT(lang==='es'?'🗑️ Trabajo eliminado de la ruta':'🗑️ Job removed from route');
+  };
+
+  // V25.9 (staging convenience): move any route dated before today up to
+  // today's date, so a route imported on a previous day becomes visible for
+  // technicians without touching SQL. In production routes are imported fresh
+  // daily, so this button is mainly a testing aid — harmless if unused.
+  const[movingRoutes,setMovingRoutes]=useState(false);
+  const moveRoutesToToday=async()=>{
+    if(!SUPABASE_CONFIGURED){showT(lang==='es'?'⚠️ Supabase no configurado':'⚠️ Supabase not configured');return;}
+    setMovingRoutes(true);
+    try{
+      const {error,count}=await sb.from('routes')
+        .update({date:today},{count:'exact'})
+        .lt('date',today);
+      if(error)throw error;
+      showT(lang==='es'
+        ?`📅 ${count??0} trabajos movidos a hoy (${today})`
+        :`📅 ${count??0} jobs moved to today (${today})`);
+      await loadAll(today);
+      setImportRouteDate(today);
+    }catch(e:any){
+      showT('❌ '+(e?.message||String(e)));
+    }finally{
+      setMovingRoutes(false);
+    }
+  };
+
+  const loadAll=useCallback(async(routeDateOverride?:string)=>{
+    const selectedRouteDate=routeDateOverride||importRouteDate||today;
+    try{
+      if(!SUPABASE_CONFIGURED){
+        setRoutes(readRouteCache(selectedRouteDate));
+        setReports([]);setNotes([]);setTechLocations([]);setSupPhotos([]);setTechNotes([]);
+        return;
+      }
+      const[routesRes,reportsRes,notesRes,locRes,techNotesRes]=await Promise.all([
+        sb.from('routes').select('id,date,tech_id,job_id,address,city,zip,type,status,pay_code,pay_total,reason,job_note,order_num,phone,region,is_duplicate,created_at').eq('date',selectedRouteDate).eq('region',region).order('tech_id').order('order_num'),
+        sb.from('not_done_reports').select('*').eq('date',today).order('created_at',{ascending:false}).limit(250),
+        sb.from('supervisor_notes').select('*').eq('date',today).order('created_at',{ascending:false}).limit(150),
+        sb.from('tech_locations').select('tech_id,tech_name,lat,lng,updated_at').order('updated_at',{ascending:false}),
+        sb.from('tech_notes').select('*').eq('date',today).order('created_at',{ascending:false}).limit(150),
+      ]);
+      // ── Fotos: solo metadatos, no cargar en loadAll — se piden on-demand por job ──
+      const routeIds=(routesRes.data||[]).map((r:any)=>r.id);
+      const photosRes=routeIds.length>0?await sb.from('job_photos').select('id,route_id,tech_id,job_id,photo_url,thumb_url,photo_type,note,created_at').in('route_id',routeIds):{data:[]};
+      const cachedRouteRows=readRouteCache(selectedRouteDate);
+      const supabaseRouteRows=Array.isArray(routesRes.data)?routesRes.data:[];
+      const nextRoutes=normalizeRouteRows(supabaseRouteRows.length?supabaseRouteRows:cachedRouteRows,selectedRouteDate);
+      if(nextRoutes.length)writeRouteCache(selectedRouteDate,nextRoutes);
+      if(Object.keys(statusSoundRef.current).length){
+        nextRoutes.forEach((job:any)=>{
+          const previous=statusSoundRef.current[String(job.id)];
+          if(previous && previous!==job.status){
+            if(job.status==='done') notifyWithSound('done',lang==='es'?'Trabajo completado':'Job completed',`#${job.job_id} · ${getTechName(job.tech_id)}`,`supervisor-done-${job.id}`).catch(()=>{});
+            if(job.status==='notdone') notifyWithSound('notdone',lang==='es'?'Trabajo no completado':'Job not completed',`#${job.job_id} · ${getTechName(job.tech_id)}`,`supervisor-notdone-${job.id}`).catch(()=>{});
+          }
+        });
+      }
+      statusSoundRef.current=Object.fromEntries(nextRoutes.map((job:any)=>[String(job.id),job.status]));
+      setRoutes(nextRoutes);
+      setReports((reportsRes.data||[]).filter((r:any)=>!r.region||r.region===region));
+      setNotes((notesRes.data||[]).filter((n:any)=>!n.region||n.region===region));
+      const regionTechIds=new Set(getTechsByRegion(region).map((tt:any)=>tt.id));
+      const pendingTechIds=new Set(nextRoutes.filter((job:any)=>String(job.status)==='pending').map((job:any)=>String(job.tech_id)));
+      const trackingOpen=isFieldTrackingWindow();
+      const freshCutoff=Date.now()-2*60*1000;
+      setTechLocations(trackingOpen
+        ? (locRes.data||[]).filter((l:any)=>regionTechIds.has(String(l.tech_id))&&pendingTechIds.has(String(l.tech_id))&&l.updated_at&&new Date(l.updated_at).getTime()>=freshCutoff)
+        : []);
+      setSupPhotos(photosRes.data||[]);
+      setTechNotes((techNotesRes.data||[]).filter((n:any)=>!n.region||n.region===region));
+    }catch(err){
+      console.error('loadAll error:',err);
+      const selectedRouteDate=routeDateOverride||importRouteDate||today;
+      const cached=readRouteCache(selectedRouteDate);
+      if(cached.length){setRoutes(cached);return;}
+      const{data:r}=await sb.from('routes').select('id,date,tech_id,job_id,address,city,zip,type,status,pay_code,pay_total,reason,job_note,order_num,phone,region,is_duplicate,created_at').eq('date',selectedRouteDate).eq('region',region).order('tech_id').order('order_num').catch(()=>({data:[]}));
+      const normalized=normalizeRouteRows(r||[],selectedRouteDate);
+      if(normalized.length)writeRouteCache(selectedRouteDate,normalized);
+      setRoutes(normalized);
+    }
+  },[today,region,importRouteDate]);
+
+  useEffect(()=>{
+    loadAll();loadWeekly();loadDbTechs();
+    // Near-real-time supervisor refresh: realtime events when available, short polling fallback.
+    const interval = setInterval(()=>{ loadAll(); }, isFieldTrackingWindow() ? 15000 : 60000);
+    const channel = sb.channel(`supervisor-live-${region}-${today}`)
+      .on('postgres_changes',{event:'*',schema:'public',table:'tech_locations'},()=>loadAll())
+      .on('postgres_changes',{event:'*',schema:'public',table:'routes',filter:`date=eq.${today}`},()=>loadAll())
+      .subscribe();
+    return()=>{clearInterval(interval); try{sb.removeChannel(channel);}catch{}};
+  },[loadAll, loadWeekly, loadDbTechs, region, today]);
+
+  const processImportFile=async(file:File)=>{
+    if(!file)return;
+    setImportError(null);setImporting(true);setPendingImportFile(file);
+    showT(`📂 ${lang==='es'?'Analizando':'Analyzing'}: ${file.name}`);
+    try{
+      const preview=await parseRouteImport(file,region,importRouteDate);
+      if(!SUPABASE_CONFIGURED){
+        setImportPreview({
+          ...preview,
+          existingRouteCount:readRouteCache(preview.routeDate).length,
+          existingDuplicateCount:0,
+        } as any);
+        return;
+      }
+      const {data:existingRoute}=await sb.from('routes').select('id').eq('date',preview.routeDate).eq('region',region);
+      const {data:existingJobs}=await sb.from('routes').select('job_id').in('job_id',preview.jobs.map(job=>job.job_id).slice(0,500));
+      const existingIds=new Set((existingJobs||[]).map((row:any)=>String(row.job_id)));
+      const existingDuplicateCount=preview.jobs.filter(job=>existingIds.has(String(job.job_id))).length;
+      setImportPreview({
+        ...preview,
+        existingRouteCount:(existingRoute||[]).length,
+        existingDuplicateCount,
+      } as any);
+    }catch(error:any){
+      setImportError(error?.message||String(error));
+      setPendingImportFile(null);
+    }finally{
+      setImporting(false);
+    }
+  };
+
+  const discardImportPreview=async()=>{
+    const preview=importPreview;
+    if(preview){
+      createAuditLog({
+        action:'route_import_discarded',entity:'route_import',
+        metadata:{region,actorRole:effectiveRole,actorName,filename:preview.filename,date:preview.routeDate,count:preview.jobs.length,summary:`Import preview discarded: ${preview.filename}`}
+      }).catch(()=>{});
+    }
+    setImportPreview(null);setPendingImportFile(null);setImportError(null);
+    showT(lang==='es'?'🗑 Vista previa descartada. Nada fue guardado.':'🗑 Import preview discarded. Nothing was saved.');
+  };
+
+  const publishImportPreview=async(preview:RouteImportPreview)=>{
+    setPublishingImport(true);setImportError(null);
+    const fail=(message:string)=>{setImportError(message);setPublishingImport(false);};
+    try{
+      const jobs=preview.jobs.map(job=>({...job,date:preview.routeDate,region}));
+      const uniqueTechIds=[...new Set(jobs.map((job:any)=>job.tech_id))];
+      if(!SUPABASE_CONFIGURED){
+        const publishedRows=normalizeRouteRows(jobs,preview.routeDate);
+        writeRouteCache(preview.routeDate,publishedRows);
+        selectRouteDate(preview.routeDate);
+        setRoutes(publishedRows);
+        statusSoundRef.current=Object.fromEntries(publishedRows.map((job:any)=>[String(job.id),job.status]));
+        setImportPreview(null);setPendingImportFile(null);setPublishingImport(false);
+        setActiveTab('route');
+        showT(`✅ ${publishedRows.length} ${lang==='es'?'trabajos publicados localmente para':'jobs published locally for'} ${preview.routeDate}`);
+        return;
+      }
+      const{data:existingTechs,error:techFetchErr}=await sb.from('technicians').select('id').in('id',uniqueTechIds);
+      if(techFetchErr){fail('Technician validation failed: '+techFetchErr.message);return;}
+      const knownIds=new Set((existingTechs||[]).map((technician:any)=>technician.id));
+      const newTechs=uniqueTechIds.filter(id=>!knownIds.has(id)).map(id=>({id,name:`Tech #${id}`,region,active:true}));
+      if(newTechs.length){
+        const{error}=await sb.from('technicians').upsert(newTechs,{onConflict:'id'});
+        if(error){fail('Unable to create technicians: '+error.message);return;}
+      }
+
+      const{data:previousRoutes,error:previousRoutesError}=await sb.from('routes').select('*').eq('date',preview.routeDate).eq('region',region);
+      if(previousRoutesError){fail('Unable to read the existing route: '+previousRoutesError.message);return;}
+      if(previousRoutes?.length){
+        await saveDailyRouteSnapshot(region,preview.routeDate,previousRoutes);
+        const permanent=await savePermanentRouteArchive(region,preview.routeDate,previousRoutes);
+        if(permanent.warning)addAppNotification({kind:'info',title:'Route version archive warning',body:permanent.warning,tag:`route-version-warning-${region}-${preview.routeDate}`});
+      }
+
+      const{data:openCancelled}=await sb.from('cancelled_jobs').select('address,city').eq('region',region).eq('status','cancelled');
+      const cancelledAddresses=new Set((openCancelled||[]).map((row:any)=>`${String(row.address||'').trim().toLowerCase()}|${String(row.city||'').trim().toLowerCase()}`));
+      const flaggedJobs=jobs.map((job:any)=>({...job,is_duplicate:cancelledAddresses.has(`${String(job.address||'').trim().toLowerCase()}|${String(job.city||'').trim().toLowerCase()}`)}));
+      const duplicateCount=flaggedJobs.filter((job:any)=>job.is_duplicate).length;
+
+      const{error:deleteError}=await sb.from('routes').delete().eq('date',preview.routeDate).eq('region',region);
+      if(deleteError){fail('Unable to replace route: '+deleteError.message);return;}
+      for(let index=0;index<flaggedJobs.length;index+=50){
+        const{error}=await sb.from('routes').insert(flaggedJobs.slice(index,index+50));
+        if(error){fail('Unable to publish jobs: '+error.message);return;}
+      }
+      await saveDailyRouteSnapshot(region,preview.routeDate,flaggedJobs);
+      const poolResult=await reconcileNotDonePoolWithRoute(region,preview.routeDate,flaggedJobs,actorName).catch(error=>{console.warn('Not done pool reconciliation failed',error);return {scheduled:0,resolved:0};});
+      const publishedRows=normalizeRouteRows(flaggedJobs,preview.routeDate);
+      writeRouteCache(preview.routeDate,publishedRows);
+      selectRouteDate(preview.routeDate);
+      setRoutes(publishedRows);
+      statusSoundRef.current=Object.fromEntries(publishedRows.map((job:any)=>[String(job.id),job.status]));
+      try{
+        await sb.from('route_imports').insert({
+          region,route_date:preview.routeDate,filename:preview.filename,uploaded_by:actorName,uploaded_by_role:effectiveRole,
+          job_count:flaggedJobs.length,technician_count:uniqueTechIds.length,duplicate_count:duplicateCount,status:'published',metadata:{sheet:preview.sheetName,warnings:preview.warnings,not_done_pool:poolResult},
+        });
+      }catch(error){console.warn('route_imports table unavailable',error);}
+
+      createAuditLog({action:'route_imported',entity:'route',metadata:{region,actorRole:effectiveRole,actorName,date:preview.routeDate,filename:preview.filename,count:flaggedJobs.length,duplicateCount,summary:`Published ${flaggedJobs.length} jobs from ${preview.filename}`}}).catch(()=>{});
+      setImportPreview(null);setPendingImportFile(null);setPublishingImport(false);
+      setActiveTab('route');
+      await loadAll(preview.routeDate);
+      showT(`✅ ${flaggedJobs.length} ${lang==='es'?'trabajos publicados para':'jobs published for'} ${preview.routeDate} · ${poolResult.scheduled} ${lang==='es'?'pendientes viejos encontrados':'past pending matches'}`);
+    }catch(error:any){fail(error?.message||String(error));}
+  };
+
+  const handleImportSelection=(e)=>{
+    const file=e.target.files?.[0];
+    if(file) processImportFile(file);
+    e.target.value='';
+  };
+
+  const addManualJob=async()=>{
+    if(!addJobForm.tech_id||!addJobForm.job_id||!addJobForm.address){showT('⚠️ Required fields missing');return;}
+    const maxOrder=routes.filter(r=>r.tech_id===addJobForm.tech_id).length;
+    await sb.from('routes').insert({...addJobForm,date:today,status:'pending',order_num:maxOrder+1,region});
+    createAuditLog({ action:'job_created', entity:'route', metadata:{ region, actorRole:effectiveRole, actorName, targetTech:addJobForm.tech_id, job_id:addJobForm.job_id, summary:`Manual job ${addJobForm.job_id} added to tech ${addJobForm.tech_id}` } }).catch(()=>{});
+    setAddJobForm({tech_id:'',job_id:'',address:'',city:'',phone:'',type:'JS:BURY COAX'});
+    loadAll();showT('✅ Job added');
+  };
+  const addNote=async()=>{
+    if(!noteForm.content.trim()){showT('⚠️ Write the note content');return;}
+    await sb.from('supervisor_notes').insert({...noteForm,date:today,tech_id:noteForm.tech_id||null,region});
+    createAuditLog({ action:'note_created', entity:'supervisor_note', metadata:{ region, actorRole:effectiveRole, actorName, targetTech:noteForm.tech_id||'all', summary:`Supervisor note created (${noteForm.type})` } }).catch(()=>{});
+    setNoteForm({type:'recommendation',content:'',tech_id:''});
+    loadAll();showT('✅ Note sent');
+  };
+
+  const techGroups=routes.reduce((acc,job)=>{const k=job.tech_id;if(!acc[k])acc[k]={techId:k,jobs:[]};acc[k].jobs.push(job);return acc;},{});
+  const techList=Object.values(techGroups).sort((a,b)=>a.techId.localeCompare(b.techId));
+  const totalJobs=routes.length;
+  const doneJobs=routes.filter(r=>r.status==='done');
+  const notDoneJobs=routes.filter(r=>r.status==='notdone');
+  const pendingJobs=routes.filter(r=>r.status==='pending');
+  const totalEarned=doneJobs.reduce((s,j)=>s+(j.pay_total||0),0);
+  const notComp=reports.filter(r=>r.status!=='eod').length;
+  const calcScore=(jobs)=>{if(!jobs.length)return 0;const done=jobs.filter(j=>j.status==='done').length;const nd=jobs.filter(j=>j.status==='notdone').length;return Math.round((done/jobs.length)*70+((done+nd)/jobs.length)*30);};
+  const scoreColor=(s)=>s>=80?'#00dc85':s>=50?'#ffbe00':'#ff3348';
+  const staleTechs=techList.filter(({techId:tid,jobs:tj})=>{
+    const hasPending=tj.some(j=>j.status==='pending');
+    if(!hasPending)return false;
+    const lastUp=tj.reduce((mx,j)=>Math.max(mx,new Date(j.created_at||0).getTime()),0);
+    return(Date.now()-lastUp)>2*3600*1000;
+  });
+  const tabBtn=(id:string,label:string)=>(
+    <button className={activeTab===id?'is-active':''} onClick={()=>setActiveTab(id)} style={{background:"none",border:"none",cursor:"pointer",padding:"10px 12px",fontFamily:"'Barlow',sans-serif",fontWeight:600,fontSize:13,color:activeTab===id?C.accent:C.dim,borderBottom:activeTab===id?`2px solid ${C.accent}`:"2px solid transparent",whiteSpace:"nowrap" as const,flexShrink:0,transition:"color .2s"}}>{label}</button>
+  );
+
+  return(
+    <div className="supervisor-portal supervisor-portal-clean" style={{minHeight:"100vh",background:C.bg,fontFamily:"'Barlow',sans-serif"}}>
+      {editJob&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.86)',zIndex:950,display:'flex',alignItems:'center',justifyContent:'center',padding:18,overflowY:'auto'}}>
+          <div style={{background:'#0b1830',border:'1px solid #00b8f555',borderRadius:18,padding:22,width:'100%',maxWidth:720,maxHeight:'92vh',overflowY:'auto'}}>
+            <div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'center',marginBottom:14}}>
+              <div><div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:22,fontWeight:900,color:'#00b8f5'}}>✏️ {lang==='es'?'Editar trabajo':'Edit job'} #{editJob.job_id}</div><div style={{fontSize:11,color:C.dim}}>{lang==='es'?'Supervisor y Admin pueden corregir todos los campos del trabajo.':'Supervisor and Admin can correct every job field.'}</div></div>
+              <button onClick={()=>{setEditJob(null);setEditForm({});}} style={{background:'none',border:'1px solid #162e58',borderRadius:8,padding:'6px 10px',color:C.dim,cursor:'pointer'}}>✕</button>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:10}}>
+              {[
+                ['date',lang==='es'?'Fecha':'Date','date'],['tech_id',lang==='es'?'Técnico':'Technician','select'],['job_id','Job ID','text'],['address',lang==='es'?'Dirección':'Address','text'],['city',lang==='es'?'Ciudad':'City','text'],['zip','ZIP','text'],['phone',lang==='es'?'Teléfono':'Phone','text'],['type',lang==='es'?'Tipo':'Type','text'],['status',lang==='es'?'Estado':'Status','status'],['pay_code','Billing / Pay code','text'],['pay_total',lang==='es'?'Pago total':'Pay total','number'],['order_num',lang==='es'?'Orden':'Order','number']
+              ].map(([key,label,type])=><div key={key}><label style={{display:'block',fontSize:10,color:C.dim,marginBottom:4,textTransform:'uppercase'}}>{label}</label>{type==='select'?<select value={editForm[key]||''} onChange={e=>setEditForm(f=>({...f,[key]:e.target.value}))} style={{width:'100%',background:'#071327',border:'1px solid #162e58',borderRadius:8,padding:'10px',color:C.text}}>{regionTechs.map(tt=><option key={tt.id} value={tt.id}>{tt.id} — {tt.name}</option>)}</select>:type==='status'?<select value={editForm[key]||'pending'} onChange={e=>setEditForm(f=>({...f,[key]:e.target.value}))} style={{width:'100%',background:'#071327',border:'1px solid #162e58',borderRadius:8,padding:'10px',color:C.text}}><option value='pending'>Pending</option><option value='done'>Done</option><option value='notdone'>Not completed</option></select>:<input type={type} value={editForm[key]??''} onChange={e=>setEditForm(f=>({...f,[key]:e.target.value}))} style={{width:'100%',background:'#071327',border:'1px solid #162e58',borderRadius:8,padding:'10px',color:C.text}}/>}</div>)}
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginTop:10}}>
+              <div><label style={{display:'block',fontSize:10,color:C.dim,marginBottom:4,textTransform:'uppercase'}}>{lang==='es'?'Razón no completado':'Not-completed reason'}</label><textarea value={editForm.reason||''} onChange={e=>setEditForm(f=>({...f,reason:e.target.value}))} style={{width:'100%',minHeight:80,background:'#071327',border:'1px solid #162e58',borderRadius:8,padding:'10px',color:C.text,resize:'vertical'}}/></div>
+              <div><label style={{display:'block',fontSize:10,color:C.dim,marginBottom:4,textTransform:'uppercase'}}>{lang==='es'?'Nota del trabajo':'Job note'}</label><textarea value={editForm.job_note||''} onChange={e=>setEditForm(f=>({...f,job_note:e.target.value}))} style={{width:'100%',minHeight:80,background:'#071327',border:'1px solid #162e58',borderRadius:8,padding:'10px',color:C.text,resize:'vertical'}}/></div>
+            </div>
+            <div style={{display:'flex',gap:10,marginTop:16}}><button onClick={saveJobEdits} disabled={editSaving} style={{flex:1,background:'linear-gradient(135deg,#0040c0,#00b8f5)',border:'none',borderRadius:10,padding:'12px',color:'#fff',fontWeight:900,cursor:'pointer'}}>{editSaving?(lang==='es'?'Guardando...':'Saving...'):(lang==='es'?'Guardar todos los cambios':'Save all changes')}</button><button onClick={()=>{setEditJob(null);setEditForm({});}} style={{background:'none',border:'1px solid #162e58',borderRadius:10,padding:'12px 18px',color:C.dim,cursor:'pointer'}}>{lang==='es'?'Cancelar':'Cancel'}</button></div>
+          </div>
+        </div>
+      )}
+      {deleteJobTarget&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:960,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}><div style={{background:'#0b1830',border:'1px solid #ff334866',borderRadius:18,padding:24,width:'100%',maxWidth:430}}><div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:23,fontWeight:900,color:'#ff3348'}}>🗑️ {lang==='es'?'Eliminar trabajo de la ruta':'Delete job from route'}</div><div style={{fontSize:12,color:C.dim,margin:'8px 0 14px'}}>#{deleteJobTarget.job_id} · {deleteJobTarget.address}<br/>{lang==='es'?'Solo Admin puede eliminar. La acción quedará en Audit Trail.':'Admin only. This action will remain in Audit Trail.'}</div>{secureAuth&&<><label style={{fontSize:10,color:C.dim,display:'block',marginBottom:4}}>{lang==='es'?'CONTRASEÑA DE LA CUENTA':'ACCOUNT PASSWORD'}</label><input type='password' value={deleteJobPassword} onChange={e=>setDeleteJobPassword(e.target.value)} placeholder='••••••••' style={{width:'100%',background:'#071327',border:'1px solid #162e58',borderRadius:9,padding:'11px',color:C.text,marginBottom:10}}/></>}<label style={{fontSize:10,color:C.dim,display:'block',marginBottom:4}}>ADMIN PIN</label><input type='password' value={deleteJobPin} onChange={e=>setDeleteJobPin(e.target.value.replace(/\D/g,''))} placeholder='••••••' style={{width:'100%',background:'#071327',border:'1px solid #162e58',borderRadius:9,padding:'11px',color:C.text,marginBottom:10}}/><label style={{fontSize:10,color:C.dim,display:'block',marginBottom:4}}>{lang==='es'?'ESCRIBE DELETE JOB':'TYPE DELETE JOB'}</label><input value={deleteJobPhrase} onChange={e=>setDeleteJobPhrase(e.target.value.toUpperCase())} placeholder='DELETE JOB' style={{width:'100%',background:'#071327',border:'1px solid #162e58',borderRadius:9,padding:'11px',color:C.text,marginBottom:14}}/><div style={{display:'flex',gap:10}}><button onClick={()=>{setDeleteJobTarget(null);setDeleteJobPin('');setDeleteJobPassword('');setDeleteJobPhrase('');}} style={{flex:1,background:'none',border:'1px solid #162e58',borderRadius:9,padding:'11px',color:C.dim,cursor:'pointer'}}>{lang==='es'?'Cancelar':'Cancel'}</button><button onClick={confirmDeleteJob} style={{flex:1,background:'#ff3348',border:'none',borderRadius:9,padding:'11px',color:'#fff',fontWeight:900,cursor:'pointer'}}>{lang==='es'?'Eliminar trabajo':'Delete job'}</button></div></div></div>
+      )}
+      {reassignJob&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:C.card,border:"1px solid #162e58",borderRadius:16,padding:24,width:"100%",maxWidth:360}}>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:16,fontWeight:800,color:C.text,marginBottom:4}}>🔄 {lang==='es'?'Reasignar Trabajo':'Reassign Job'}</div>
+            <div style={{fontSize:12,color:C.dim,marginBottom:16}}>#{reassignJob.job_id} — {reassignJob.address}</div>
+            <select value={reassignTech} onChange={e=>setReassignTech(e.target.value)} style={{width:"100%",background:"#0e1e3a",border:"1px solid #162e58",borderRadius:8,padding:"10px 12px",color:C.text,fontSize:13,fontFamily:"'Barlow',sans-serif",marginBottom:12,outline:"none"}}>
+              <option value="">{lang==='es'?'— Seleccionar técnico —':'— Select technician —'}</option>
+              {regionTechs.map((tc:any)=><option key={tc.id} value={tc.id}>{tc.id} — {tc.name}</option>)}
+            </select>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={doReassign} disabled={!reassignTech} style={{flex:1,background:"#00dc85",border:"none",borderRadius:8,padding:"11px",color:"#04091c",fontWeight:800,cursor:"pointer",fontSize:13,opacity:reassignTech?1:0.5}}>{lang==='es'?'Confirmar':'Confirm'}</button>
+              <button onClick={()=>{setReassignJob(null);setReassignTech('');}} style={{flex:1,background:"none",border:"1px solid #162e58",borderRadius:8,padding:"11px",color:C.dim,cursor:"pointer",fontSize:13}}>{lang==='es'?'Cancelar':'Cancel'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {bulkReassignFrom&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:C.card,border:"1px solid #ffbe0055",borderRadius:16,padding:24,width:"100%",maxWidth:380}}>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:16,fontWeight:800,color:"#ffbe00"}}>🔄 {lang==='es'?'Reasignar Ruta Completa':'Reassign Entire Route'}</div>
+            <div style={{fontSize:12,color:C.dim,marginBottom:16}}>{lang==='es'?`Mover TODOS los trabajos de ${getTechName(bulkReassignFrom)} (${routes.filter(r=>r.tech_id===bulkReassignFrom).length} trabajos) a otro técnico.`:`Move ALL jobs from ${getTechName(bulkReassignFrom)} (${routes.filter(r=>r.tech_id===bulkReassignFrom).length} jobs) to another technician.`}</div>
+            <select value={bulkReassignTo} onChange={e=>setBulkReassignTo(e.target.value)} style={{width:"100%",background:"#0e1e3a",border:"1px solid #162e58",borderRadius:8,padding:"10px 12px",color:C.text,fontSize:13,fontFamily:"'Barlow',sans-serif",marginBottom:12,outline:"none"}}>
+              <option value="">{lang==='es'?'— Seleccionar técnico —':'— Select technician —'}</option>
+              {regionTechs.filter((tc:any)=>tc.id!==bulkReassignFrom).map((tc:any)=><option key={tc.id} value={tc.id}>{tc.id} — {tc.name}</option>)}
+            </select>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={doBulkReassign} disabled={!bulkReassignTo} style={{flex:1,background:"#ffbe00",border:"none",borderRadius:8,padding:"11px",color:"#04091c",fontWeight:800,cursor:"pointer",fontSize:13,opacity:bulkReassignTo?1:0.5}}>{lang==='es'?'Confirmar':'Confirm'}</button>
+              <button onClick={()=>{setBulkReassignFrom(null);setBulkReassignTo('');}} style={{flex:1,background:"none",border:"1px solid #162e58",borderRadius:8,padding:"11px",color:C.dim,cursor:"pointer",fontSize:13}}>{lang==='es'?'Cancelar':'Cancel'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {importPreview&&(<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:915,display:'flex',alignItems:'center',justifyContent:'center',padding:18}}><div style={{width:'100%',maxWidth:720,maxHeight:'92vh',overflowY:'auto',background:'#0b1830',border:'1px solid #00b8f566',borderRadius:18,padding:22}}><div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:26,fontWeight:900,color:'#00b8f5'}}>📂 {lang==='es'?'Vista previa de importación':'Route Import Preview'}</div><div style={{color:C.dim,fontSize:12,margin:'5px 0 14px'}}>{lang==='es'?'Nada se guardará hasta que publiques la ruta.':'Nothing is saved until you publish the route.'}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:8}}>{[{l:lang==='es'?'Archivo':'File',v:importPreview.filename,c:'#00b8f5'},{l:lang==='es'?'Fecha ruta':'Route date',v:importPreview.routeDate,c:'#9d5fff'},{l:lang==='es'?'Trabajos':'Jobs',v:importPreview.jobs.length,c:'#00dc85'},{l:lang==='es'?'Técnicos':'Technicians',v:importPreview.technicianCount,c:'#9d5fff'},{l:lang==='es'?'Duplicados archivo':'File duplicates',v:importPreview.duplicateJobCount,c:'#ffbe00'},{l:lang==='es'?'Duplicados existentes':'Existing duplicates',v:(importPreview as any).existingDuplicateCount||0,c:'#ff6a1a'},{l:lang==='es'?'Teléfonos inválidos':'Invalid phones',v:importPreview.invalidPhoneCount,c:'#ff3348'}].map((item:any)=><div key={item.l} style={{background:'#071327',border:`1px solid ${item.c}44`,borderRadius:10,padding:10}}><div style={{fontSize:10,color:C.dim}}>{item.l}</div><div style={{fontSize:typeof item.v==='number'?23:12,fontWeight:900,color:item.c,wordBreak:'break-word'}}>{item.v}</div></div>)}</div>{((importPreview as any).existingRouteCount||0)>0&&<div style={{marginTop:12,background:'#ffbe0014',border:'1px solid #ffbe0055',borderRadius:9,padding:'9px 11px',color:'#ffbe00',fontSize:11}}>⚠️ {lang==='es'?`Esta fecha ya tiene ${(importPreview as any).existingRouteCount} trabajos. Publicar reemplazará la ruta activa después de archivarla.`:`This date already has ${(importPreview as any).existingRouteCount} jobs. Publishing will replace the active route after archiving it.`}</div>}{importPreview.warnings.length>0&&<div style={{marginTop:12,background:'#071327',borderRadius:9,padding:'10px 12px'}}>{importPreview.warnings.map((warning:string)=><div key={warning} style={{fontSize:11,color:'#c8d8f4',marginBottom:4}}>• {warning}</div>)}</div>}<div style={{marginTop:14,maxHeight:220,overflowY:'auto',border:'1px solid #162e58',borderRadius:10}}>{importPreview.jobs.slice(0,30).map((job:any,index:number)=><div key={`${job.job_id}-${index}`} style={{padding:'8px 10px',borderBottom:'1px solid #162e5833',display:'grid',gridTemplateColumns:'48px 1fr 90px',gap:8,fontSize:11}}><span style={{color:'#9d5fff'}}>{job.tech_id}</span><span style={{color:C.text}}>#{job.job_id} · {job.address}</span><span style={{color:job.phone?'#00dc85':'#ff3348'}}>{job.phone||'No phone'}</span></div>)}</div><div style={{fontSize:10,color:C.dim,marginTop:6}}>{lang==='es'?'Mostrando los primeros 30 trabajos.':'Showing the first 30 jobs.'}</div><div style={{display:'flex',gap:9,marginTop:16,flexWrap:'wrap'}}><button onClick={discardImportPreview} style={{flex:1,minWidth:150,background:'#ff334822',border:'1px solid #ff3348',borderRadius:10,padding:'12px',color:'#ff6677',fontWeight:900,cursor:'pointer'}}>{lang==='es'?'Descartar importación':'Discard Import'}</button><button onClick={()=>fileRef.current?.click()} style={{flex:1,minWidth:150,background:'#162e58',border:'1px solid #294a80',borderRadius:10,padding:'12px',color:'#c8d8f4',fontWeight:900,cursor:'pointer'}}>{lang==='es'?'Elegir otro archivo':'Choose Another File'}</button><button onClick={()=>publishImportPreview(importPreview)} style={{flex:1,minWidth:170,background:'linear-gradient(135deg,#0040c0,#00b8f5)',border:'none',borderRadius:10,padding:'12px',color:'#fff',fontWeight:900,cursor:'pointer'}}>{lang==='es'?'Publicar ruta':'Publish Route'}</button></div></div></div>)}
+      <SuperAdminDeleteGate
+        open={showDeleteRouteGate}
+        auth={auth}
+        lang={lang}
+        action="route_delete"
+        entity="route"
+        entityId={`${region}:${importRouteDate||today}`}
+        metadata={{ region, actorRole:effectiveRole, actorName, date:importRouteDate||today, count:routes.length }}
+        expectedPhrase={SECURITY_PHRASES.clear}
+        title={lang==='es'?'Borrar ruta — Super Admin requerido':'Delete route — Super Admin required'}
+        description={lang==='es'?'Esta acción archiva y borra permanentemente todos los trabajos de la fecha/región seleccionada.':'This permanently archives and deletes every job for the selected date/region.'}
+        busy={deletingRoute}
+        onCancel={()=>setShowDeleteRouteGate(false)}
+        onConfirm={async()=>{ setDeletingRoute(true); try{ await doClearRoute(); } finally { setDeletingRoute(false); } }}
+      />
+      {showReportLang&&<ReportLangModal t={t} onSelect={(dlLang)=>{if(reportLangType==='route'){generateRouteExcelLazy(routes,supPhotos,dlLang,null);}else{generateNotDoneExcelLazy(reports,dlLang);}setShowReportLang(false);showT('📥 Downloaded');}} onClose={()=>setShowReportLang(false)}/>}
+      {showClearConfirm&&(()=>{
+        const done=routes.filter((r:any)=>r.status==='done');
+        const nd=routes.filter((r:any)=>r.status==='notdone');
+        const pend=routes.filter((r:any)=>r.status==='pending');
+        const earned=done.reduce((s:number,r:any)=>s+(r.pay_total||0),0);
+        return(
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',zIndex:800,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+            <div style={{background:'#0b1830',border:'1px solid #ff334866',borderRadius:20,padding:'28px 24px',width:'100%',maxWidth:400}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:22,fontWeight:900,color:'#ff3348',marginBottom:4}}>
+                {lang==='es'?'⚠️ Borrar Ruta':'⚠️ Clear Route'}
+              </div>
+              <div style={{fontSize:13,color:C.dim,marginBottom:16}}>
+                {lang==='es'
+                  ?'Esta acción archivará la ruta y eliminará todos los trabajos de hoy. Los datos quedarán guardados en el historial.'
+                  :'This will archive the route and remove all jobs from today. Data will be saved to history.'}
+              </div>
+              <div style={{display:'flex',gap:8,marginBottom:20,flexWrap:'wrap'}}>
+                {[
+                  {v:routes.length,c:'#00b8f5',l:lang==='es'?'Total':'Total'},
+                  {v:done.length,c:'#00dc85',l:lang==='es'?'Hechos':'Done'},
+                  {v:nd.length,c:'#ff3348',l:lang==='es'?'No Hechos':'Not Done'},
+                  {v:pend.length,c:'#ffbe00',l:lang==='es'?'Pendientes':'Pending'},
+                  {v:`$${earned}`,c:'#00b8f5',l:lang==='es'?'Ganado':'Earned'},
+                ].map((s,i)=>(
+                  <div key={i} style={{background:`${s.c}18`,border:`1px solid ${s.c}44`,borderRadius:10,padding:'8px 12px',textAlign:'center',flex:1,minWidth:60}}>
+                    <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:20,fontWeight:900,color:s.c}}>{s.v}</div>
+                    <div style={{fontSize:9,color:C.dim,textTransform:'uppercase',letterSpacing:1}}>{s.l}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:'flex',gap:10}}>
+                <button onClick={()=>setShowClearConfirm(false)} style={{flex:1,background:'none',border:'1px solid #162e58',borderRadius:10,padding:'12px',color:C.dim,cursor:'pointer',fontWeight:600,fontSize:13}}>
+                  {lang==='es'?'Cancelar':'Cancel'}
+                </button>
+                <button onClick={()=>{setShowClearConfirm(false);setShowDeleteRouteGate(true);}} style={{flex:1,background:'#ff334822',border:'1px solid #ff3348',borderRadius:10,padding:'12px',color:'#ff3348',cursor:'pointer',fontWeight:700,fontSize:13}}>
+                  {lang==='es'?'✅ Archivar y Borrar':'✅ Archive & Clear'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+      {sessWarn&&<SessionWarning secondsLeft={sessLeft} lang={lang}/>}
+      <input type="file" ref={fileRef} accept=".xlsx,.xls" style={{display:"none"}} onChange={handleImportSelection}/>
+      {/* Header */}
+      <div className="supervisor-topbar" style={{background:"linear-gradient(180deg,#060e24,#04091c)",borderBottom:"1px solid #1a3060",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 20px #00000060"}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:20,fontWeight:900,color:C.text,letterSpacing:0.5,whiteSpace:"nowrap"}}>Guajiro &amp; Sons</div>
+            <div style={{display:"flex",alignItems:"center",gap:5,background:`${regionInfo.color}18`,border:`1px solid ${regionInfo.color}44`,borderRadius:20,padding:"3px 10px",flexShrink:0}}>
+              <span style={{fontSize:13}}>{regionInfo.emoji}</span>
+              <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:12,fontWeight:800,color:regionInfo.color,whiteSpace:"nowrap"}}>{regionInfo.name}</span>
+            </div>
+          </div>
+          <div style={{fontSize:10,color:C.dim,marginTop:1}}>🛡️ {t.supPortalLabel} · {regionInfo.sub} · {String(effectiveRole).toUpperCase()}</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5,background:"#0b1830",border:"1px solid #00dc8533",borderRadius:20,padding:"3px 10px",flexShrink:0}}>
+          <div style={{width:5,height:5,borderRadius:"50%",background:"#00dc85"}}/><span style={{fontSize:10,color:"#00dc85",fontWeight:700}}>{t.liveLabel}</span>
+        </div>
+        <LangToggle lang={lang} setLang={setLang}/>
+        <button onClick={onLogout} style={{background:"none",border:"1px solid #1a3060",borderRadius:8,padding:"6px 12px",color:C.dim,cursor:"pointer",fontSize:11,flexShrink:0,whiteSpace:"nowrap"}}>{t.exitBtn}</button>
+      </div>
+      {/* Tab bar */}
+      <div className="supervisor-tabbar supervisor-tabbar-clean" style={{background:"#060e24",borderBottom:"1px solid #1a3060",padding:"0 8px",display:"flex",overflowX:"auto",alignItems:"center",gap:0,scrollbarWidth:"none" as const}}>
+        {activeTab!=='dashboard'&&<button onClick={()=>setActiveTab('dashboard')} style={{background:"none",border:"none",borderRight:"1px solid #1a3060",padding:"0 14px",height:44,color:C.accent,cursor:"pointer",fontSize:16,flexShrink:0,display:"flex",alignItems:"center"}}>←</button>}
+        {tabBtn("dashboard",t.dashTab)}
+        {tabBtn("route",`${t.routeTab}${routes.length>0?` (${routes.length})`:''}`)}
+        {tabBtn("map",t.mapTab)}
+        {tabBtn("reports",t.reportsTab)}
+        {tabBtn("notdone_pool",lang==='es'?"🧺 Pool Pendientes":"🧺 Past Pending Pool")}
+        {tabBtn("rit","🧠 RIT")}
+        {tabBtn("tools",lang==='es'?"🧩 Herramientas":"🧩 Tools")}
+        {tabBtn("dispatch",lang==='es'?"🚚 Despacho":"🚚 Dispatch")}
+        {tabBtn("operations",lang==='es'?"🧰 Operaciones":"🧰 Operations")}
+        {isAdmin&&secureAuth&&tabBtn("security_admin",lang==='es'?"🔐 Seguridad":"🔐 Security")}
+        {tabBtn("search",lang==='es'?"🔍 Buscar":"🔍 Search")}
+        {tabBtn("db",lang==='es'?"🗄️ Historial":"🗄️ History")}
+        {tabBtn("archive",lang==='es'?"🗃️ Archivo de Rutas":"🗃️ Route Archive")}
+      </div>
+      <div className="supervisor-main-content" style={{maxWidth:1280,margin:"0 auto",padding:"clamp(12px,2vw,22px)"}}>
+        <WeatherLivePanel lang={lang} region={region}/>
+
+        {/* ══════════════════════════ DASHBOARD TAB ══════════════════════════ */}
+        {activeTab==="dashboard"&&(
+          <div className="supervisor-dashboard-clean" style={{display:"flex",flexDirection:"column",gap:16}}>
+            {/* TOP_DASHBOARD_STATS_FINAL */}
+            <div className="dashboard-priority-metrics" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12}}>
+              {[
+                {emoji:"✅",val:doneJobs.length,label:lang==='es'?"Completados":"Completed",color:"#00dc85",tab:"completed_jobs",hint:lang==='es'?"ver completados":"view completed"},
+                {emoji:"⏳",val:pendingJobs.length,label:lang==='es'?"Pendientes":"Pending",color:"#ffbe00",tab:"pending_jobs",hint:lang==='es'?"ver pendientes":"view pending"},
+                {emoji:"❌",val:notDoneJobs.length,label:lang==='es'?"Reportes Not Done":"Not Done Reports",color:"#ff3348",tab:"reports",hint:lang==='es'?"ver reportes not done":"view not done reports"},
+                {emoji:"⏱️",val:techLocations.length,label:lang==='es'?"Técnicos Activos":"Active Techs",color:"#00e0d4",tab:"map",hint:lang==='es'?"ver en campo":"view in field"},
+                {emoji:"💰",val:`$${totalEarned.toLocaleString()}`,label:lang==='es'?"Generado Hoy":"Earned Today",color:"#00b8f5",tab:"earnings",hint:lang==='es'?"ver ganancias":"view earnings"},
+                {emoji:"📊",val:totalJobs,label:lang==='es'?"Total Asignados":"Total Assigned",color:"#9d5fff",tab:"route",hint:lang==='es'?"ver ruta":"view route"},
+              ].map(s=>(
+                <button key={s.label} onClick={()=>setActiveTab(s.tab)}
+                  style={{background:C.card,border:`2px solid ${s.color}44`,borderRadius:12,padding:"12px",textAlign:"center",position:"relative",overflow:"hidden",cursor:"pointer",transition:"all .25s",width:"100%",outline:"none"}}
+                  onMouseEnter={e=>{
+                    e.currentTarget.style.transform="translateY(-4px) scale(1.03)";
+                    e.currentTarget.style.border=`2px solid ${s.color}`;
+                    e.currentTarget.style.boxShadow=`0 8px 24px ${s.color}44`;
+                    e.currentTarget.style.background=`${s.color}15`;
+                  }}
+                  onMouseLeave={e=>{
+                    e.currentTarget.style.transform="translateY(0) scale(1)";
+                    e.currentTarget.style.border=`2px solid ${s.color}44`;
+                    e.currentTarget.style.boxShadow="none";
+                    e.currentTarget.style.background=C.card;
+                  }}
+                  onMouseDown={e=>e.currentTarget.style.transform="translateY(-1px) scale(0.99)"}
+                  onMouseUp={e=>e.currentTarget.style.transform="translateY(-4px) scale(1.03)"}>
+                  <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:`linear-gradient(90deg,${s.color}00,${s.color},${s.color}00)`}}/>
+                  <div style={{fontSize:20}}>{s.emoji}</div>
+                  <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:20,fontWeight:900,color:s.color,marginTop:2}}>{s.val}</div>
+                  <div style={{fontSize:10,color:C.dim,fontWeight:600,marginTop:2}}>{s.label}</div>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:3,marginTop:5,background:`${s.color}18`,borderRadius:6,padding:"3px 6px"}}>
+                    <span style={{fontSize:9,color:s.color,fontWeight:700}}>{s.hint?.toUpperCase()||'→'}</span>
+                    <span style={{fontSize:10,color:s.color}}>›</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="dashboard-priority-progress" style={{background:C.card,border:"1px solid #162e58",borderRadius:14,padding:"14px 16px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <div>
+                    <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:13,fontWeight:700,color:C.text}}>📈 {lang==='es'?'Progreso del Día':'Day Progress'}</div>
+                    <div style={{fontSize:11,color:C.dim,marginTop:2}}>{lang==='es'?`${totalJobs} trabajos · ${techList.length} técnicos`:`${totalJobs} jobs · ${techList.length} techs`}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,fontWeight:900,color:"#00dc85"}}>{totalJobs>0?Math.round((doneJobs.length/totalJobs)*100):0}%</div>
+                    <div style={{fontSize:10,color:C.dim}}>{lang==='es'?'Completado':'Complete'}</div>
+                  </div>
+                </div>
+                <div style={{height:8,background:"#2e4470",borderRadius:99,overflow:"hidden"}}>
+                  <div style={{height:"100%",display:"flex"}}>
+                    <div style={{width:`${totalJobs>0?Math.round((doneJobs.length/totalJobs)*100):0}%`,background:"#00dc85",transition:"width 0.8s ease"}}/>
+                    <div style={{width:`${totalJobs>0?Math.round((notDoneJobs.length/totalJobs)*100):0}%`,background:"#ff3348",transition:"width 0.8s ease"}}/>
+                    <div style={{flex:1,background:"#ffbe00"}}/>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:8,marginTop:10,fontSize:11,fontWeight:600}}>
+                  <div><span style={{color:"#00dc85"}}>■</span> {doneJobs.length} {lang==='es'?'Hechos':'Done'}</div>
+                  <div><span style={{color:"#ffbe00"}}>■</span> {pendingJobs.length} {lang==='es'?'Pendientes':'Pending'}</div>
+                  <div><span style={{color:"#ff3348"}}>■</span> {notDoneJobs.length} {lang==='es'?'Reportes Not Done':'Not Done Reports'}</div>
+                </div>
+              </div>
+
+
+            <div className="dashboard-command-alert-row" style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(330px,390px)",gap:16,alignItems:"start"}}>
+              {/* ALERTS_RIGHT_OF_COMMAND_CENTER_FINAL */}
+              <div className="supervisor-command-center" style={{background:'linear-gradient(135deg,#071327,#0b1830)',border:'1px solid #1f3b67',borderRadius:18,padding:'18px',boxShadow:'0 18px 40px rgba(0,0,0,.22)'}}>
+              <div className="supervisor-command-header" style={{display:'flex',justifyContent:'space-between',gap:14,alignItems:'flex-start',marginBottom:14}}>
+                <div>
+                  <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:26,fontWeight:950,color:C.text,letterSpacing:.3}}>🧭 {lang==='es'?'Centro de mando limpio':'Clean Command Center'}</div>
+                  <div style={{fontSize:12,color:C.dim,lineHeight:1.45,marginTop:4}}>{lang==='es'?'Ruta, problemas, despacho y control agrupados para no buscar entre botones sueltos.':'Route, problem jobs, dispatch and control grouped so the portal does not feel like scattered buttons.'}</div>
+                </div>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'flex-end'}}>
+                  <span style={{background:'#00dc8518',border:'1px solid #00dc8544',borderRadius:999,padding:'6px 10px',fontSize:11,color:'#00dc85',fontWeight:900}}>● {routes.length} {lang==='es'?'jobs':'jobs'}</span>
+                  <span style={{background:'#ff334818',border:'1px solid #ff334844',borderRadius:999,padding:'6px 10px',fontSize:11,color:'#ff6677',fontWeight:900}}>❌ {notComp} Not Done</span>
+                </div>
+              </div>
+              <div className="supervisor-command-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(210px,1fr))',gap:10}}>
+                {[
+                  {group:lang==='es'?'Operaciones':'Operations',items:[
+                    {tab:'route',emoji:'🗺️',label:lang==='es'?'Ruta de hoy':'Today route',desc:lang==='es'?'Ver técnicos y trabajos actuales.':'Current technicians and jobs.'},
+                    {tab:'dispatch',emoji:'🚚',label:lang==='es'?'Despacho real':'Dispatch',desc:lang==='es'?'Asignación y movimiento de trabajos.':'Assign and move jobs.'},
+                    {tab:'map',emoji:'📍',label:lang==='es'?'Mapa liviano':'Map',desc:lang==='es'?'Ubicación y vista de campo.':'Field location view.'}
+                  ]},
+                  {group:lang==='es'?'Seguimiento':'Follow-up',items:[
+                    {tab:'notdone_pool',emoji:'🧺',label:lang==='es'?'Not Done Pool':'Not Done Pool',desc:lang==='es'?'Pendientes reales y recuperación.':'Real pending work and recovery.'},
+                    {tab:'recovery',emoji:'📲',label:lang==='es'?'Customer Recovery':'Customer Recovery',desc:lang==='es'?'Mensajes manuales y seguimiento.':'Manual messages and follow-up.'},
+                    {tab:'search',emoji:'🔍',label:lang==='es'?'Buscar job':'Search jobs',desc:lang==='es'?'Historial por job, técnico o dirección.':'History by job, tech or address.'}
+                  ]},
+                  {group:lang==='es'?'Control':'Control',items:[
+                    {tab:'tools',emoji:'🧩',label:lang==='es'?'Herramientas':'Tools',desc:lang==='es'?'Notes, Add Job, PIN, Trace.':'Notes, Add Job, PIN, Trace.'},
+                    {tab:'archive',emoji:'🗃️',label:lang==='es'?'Archivo de rutas':'Route archive',desc:lang==='es'?'Rutas guardadas y consulta.':'Saved routes and review.'},
+                    {tab:'activity',emoji:'🧾',label:lang==='es'?'Audit Trail':'Audit Trail',desc:lang==='es'?'Trazabilidad de acciones.':'Action trace.'}
+                  ]}
+                ].map(section=>(
+                  <div key={section.group} style={{background:'#071327',border:'1px solid #162e58',borderRadius:14,padding:12}}>
+                    <div style={{fontSize:11,color:'#8da4c9',fontWeight:950,textTransform:'uppercase',letterSpacing:1,marginBottom:9}}>{section.group}</div>
+                    <div style={{display:'grid',gap:8}}>
+                      {section.items.map(item=>(
+                        <button key={item.tab} onClick={()=>setActiveTab(item.tab)} style={{display:'flex',gap:10,alignItems:'center',textAlign:'left',background:'#0e1e3a',border:'1px solid #1e3560',borderRadius:12,padding:'10px 11px',cursor:'pointer',color:C.text}}>
+                          <span style={{fontSize:21,flexShrink:0}}>{item.emoji}</span>
+                          <span style={{minWidth:0}}>
+                            <strong style={{display:'block',fontSize:13,color:'#fff'}}>{item.label}</strong>
+                            <small style={{display:'block',fontSize:11,color:C.dim,lineHeight:1.25,marginTop:2}}>{item.desc}</small>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+              <div className="dashboard-alerts-right" style={{minWidth:0}}>
+                <SupervisorCloseoutMonitor routes={routes} techLocations={techLocations} region={region} lang={lang} role={effectiveRole} onOpenRoute={()=>setActiveTab('route')}/>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              {[
+                {tab:"route",emoji:"🗺️",label:lang==='es'?"Rutas del Día":"Today's Routes",sub:`${techList.length} técnicos · ${routes.length} jobs`,color:"#00b8f5",grad:"linear-gradient(135deg,#003d80,#00b8f5)"},
+                {tab:"map",emoji:"👷",label:lang==='es'?"Técnicos Activos":"Active Technicians",sub:`${techLocations.length} ${lang==='es'?'en campo':'in field'}`,color:"#9d5fff",grad:"linear-gradient(135deg,#3d0080,#9d5fff)"},
+                {tab:"notdone_pool",emoji:"🧺",label:lang==='es'?"Pool de Pendientes Pasados":"Past Pending Pool",sub:`${notComp} ${lang==='es'?'reportes nuevos':'new reports'}`,color:"#ff3348",grad:"linear-gradient(135deg,#600,#ff3348)"},
+                {tab:"notes",emoji:"📝",label:lang==='es'?"Alertas":"Alerts & Notes",sub:lang==='es'?"Sistema de notificaciones":"Notification system",color:"#ffbe00",grad:"linear-gradient(135deg,#603d00,#ffbe00)"},
+              ].map(({tab,emoji,label,sub,color,grad})=>(
+                <button key={tab} onClick={()=>setActiveTab(tab)}
+                  style={{background:C.card,border:`1px solid ${color}33`,borderRadius:14,padding:"14px",cursor:"pointer",textAlign:"left",position:"relative",overflow:"hidden",transition:"all 0.3s ease"}}
+                  onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.borderColor=color+"66";}}
+                  onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)";e.currentTarget.style.borderColor=color+"33";}}>
+                  <div style={{position:"absolute",inset:0,background:grad,opacity:0.08}}/>
+                  <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",position:"relative",zIndex:1}}>
+                    <div>
+                      <div style={{fontSize:24,marginBottom:6}}>{emoji}</div>
+                      <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:14,fontWeight:800,color:C.text}}>{label}</div>
+                      <div style={{fontSize:10,color:color,marginTop:4,fontWeight:600}}>{sub}</div>
+                    </div>
+                    <div style={{fontSize:20,opacity:0.3,color:color}}>→</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <TechDayBoard
+  routes={routes}
+  lang={lang}
+  onSelectJob={(job)=>{setExpandedTechState(job.tech_id);setActiveTab('route',`${job.tech_id}~${job.job_id}`);}}
+/>            {weeklyData.length>0&&(
+              <div style={{background:C.card,border:"1px solid #162e58",borderRadius:14,padding:"14px"}}>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:12,fontWeight:700,color:C.text,marginBottom:10}}>📈 {lang==='es'?'Últimos 7 días':'Last 7 Days'}</div>
+                <Suspense fallback={<div style={{height:120,display:'grid',placeItems:'center',color:C.dim}}>Loading chart…</div>}><SupervisorWeeklyChart data={weeklyData} lang={lang}/></Suspense>
+              </div>
+            )}
+            {staleTechs.length>0&&(
+              <div style={{background:"#ff334812",border:"2px solid #ff334833",borderRadius:14,padding:"12px 16px"}}>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:13,fontWeight:700,color:"#ff3348",marginBottom:10}}>⚠️ {lang==='es'?'Alertas Activas':'Active Alerts'}</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+                  {staleTechs.map(({techId:tid})=>(
+                    <div key={tid} style={{background:"#ff334808",border:"1px solid #ff334833",borderRadius:10,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div><div style={{fontSize:12,fontWeight:700,color:C.text}}>#{tid}</div><div style={{fontSize:10,color:C.dim}}>{getTechName(tid)}</div></div>
+                      <button onClick={()=>{setExpandedTechState(tid);setActiveTab('route',tid);}} style={{background:"none",border:"1px solid #ff334855",borderRadius:6,padding:"4px 8px",color:"#ff3348",fontSize:10,fontWeight:600,cursor:"pointer"}}>Ver →</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {techList.length>0&&(
+              <div style={{background:C.card,border:"1px solid #162e58",borderRadius:14,overflow:"hidden"}}>
+                <div style={{padding:"12px 16px",borderBottom:"1px solid #162e58",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:13,fontWeight:700,color:C.text}}>🏆 {lang==='es'?'Ranking':'Ranking'}</span>
+                  <button onClick={()=>setActiveTab('route')} style={{background:"none",border:"none",color:"#00b8f5",fontSize:10,fontWeight:600,cursor:"pointer"}}>{lang==='es'?'Ver todos →':'View all →'}</button>
+                </div>
+                {techList.sort((a,b)=>calcScore(b.jobs)-calcScore(a.jobs)).slice(0,5).map(({techId:tid,jobs:tjobs},idx)=>{
+                  const score=calcScore(tjobs);const td=tjobs.filter(j=>j.status==='done');const tn=tjobs.filter(j=>j.status==='notdone');const badge=idx===0?"🥇":idx===1?"🥈":idx===2?"🥉":"";
+                  return(
+                    <div key={tid} onClick={()=>{setExpandedTechState(tid);setActiveTab('route',tid);}}
+                      style={{padding:"12px 16px",borderBottom:"1px solid #162e5818",cursor:"pointer",display:"flex",alignItems:"center",gap:12,transition:"background 0.2s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background="#0e1e3a"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <div style={{fontSize:16,minWidth:24}}>{badge}{badge?'':idx+1}</div>
+                      <div style={{width:32,height:32,borderRadius:"50%",background:"linear-gradient(135deg,#0040a8,#00b8f5)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,color:"#fff",fontSize:10,flexShrink:0}}>{tid}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:12,fontWeight:800,color:C.text}}>{getTechName(tid)}</div>
+                        <div style={{height:4,background:"#2e4470",borderRadius:99,overflow:"hidden",marginTop:4}}><div style={{height:"100%",background:`linear-gradient(90deg,${scoreColor(score)},${scoreColor(score)}88)`,width:`${score}%`}}/></div>
+                      </div>
+                      <div style={{display:"flex",gap:6,flexShrink:0,alignItems:"center",fontSize:11,fontWeight:700}}>
+                        <span style={{background:`${scoreColor(score)}22`,borderRadius:20,padding:"3px 8px",color:scoreColor(score)}}>{score}</span>
+                        <span style={{background:"#00dc8522",borderRadius:20,padding:"3px 8px",color:"#00dc85"}}>✅{td.length}</span>
+                        <span style={{background:"#ff334822",borderRadius:20,padding:"3px 8px",color:"#ff3348"}}>❌{tn.length}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:8}}>
+              <button onClick={()=>openReportLang('notdone')} style={{background:C.card,border:"1px solid #ff334844",borderRadius:12,padding:"12px",color:"#ff3348",fontFamily:"'Barlow Condensed',sans-serif",fontSize:12,fontWeight:800,cursor:"pointer"}}>📋 {lang==='es'?'Reportes Not Done':'Not Done Reports'}</button>
+              {routes.length>0&&<button onClick={()=>openReportLang('route')} style={{background:C.card,border:"1px solid #00dc8544",borderRadius:12,padding:"12px",color:"#00dc85",fontFamily:"'Barlow Condensed',sans-serif",fontSize:12,fontWeight:800,cursor:"pointer"}}>📍 {lang==='es'?'Excel Ruta':'Route Excel'}</button>}
+            </div>
+            <div style={{background:C.card,border:'1px solid #162e58',borderRadius:14,padding:'16px',marginTop:8}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                <div>
+                  <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:17,fontWeight:900,color:C.text}}>⚡ {lang==='es'?'Panel dinámico del supervisor':'Dynamic supervisor panel'}</div>
+                  <div style={{fontSize:12,color:C.dim,marginTop:2}}>{lang==='es'?'Acciones rápidas, seguridad y trazabilidad en una sola vista.':'Quick actions, security and traceability in a single view.'}</div>
+                </div>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                  {!isViewer&&<button onClick={()=>setActiveTab('activity')} style={{background:'#9d5fff22',border:'1px solid #9d5fff',borderRadius:10,padding:'9px 12px',color:'#c39dff',fontWeight:700,cursor:'pointer',fontSize:12}}>{lang==='es'?'Ver trazas':'Open trace'}</button>}
+                  <button onClick={()=>setActiveTab('archive')} style={{background:'#00b8f522',border:'1px solid #00b8f5',borderRadius:10,padding:'9px 12px',color:'#00b8f5',fontWeight:700,cursor:'pointer',fontSize:12}}>{lang==='es'?'Archivo de rutas':'Route archive'}</button>
+                  <button onClick={()=>setActiveTab('search')} style={{background:'#00dc8522',border:'1px solid #00dc85',borderRadius:10,padding:'9px 12px',color:'#00dc85',fontWeight:700,cursor:'pointer',fontSize:12}}>{lang==='es'?'Buscar historial':'Search history'}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════ ROUTE TAB ══════════════════════════ */}
+        {activeTab==="route"&&(
+          <div className="supervisor-route-page" style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div className="supervisor-route-card" style={{background:C.card,border:"1px solid #162e58",borderRadius:16,padding:"20px"}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:15,fontWeight:700,color:C.text,marginBottom:12}}>{t.routeTab}</div>
+              {importError&&<div style={{background:"#ff334822",border:"1px solid #ff3348",borderRadius:10,padding:"10px 14px",color:"#ff6677",fontSize:13,marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span>❌ {importError}</span><button onClick={()=>setImportError(null)} style={{background:"none",border:"none",color:"#ff6677",cursor:"pointer",fontSize:18,lineHeight:1}}>×</button></div>}
+              <div className="supervisor-route-toolbar" style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+                {!isViewer&&<button onClick={()=>fileRef.current.click()} disabled={false} style={{background:"linear-gradient(135deg,#0040c0,#00b8f5)",border:"none",borderRadius:10,padding:"11px 18px",color:"#fff",fontWeight:700,cursor:"pointer",fontSize:13}}>{'Import Route'}</button>}
+                {!isViewer&&<button onClick={moveRoutesToToday} disabled={movingRoutes} style={{background:"#ffbe0022",border:"1px solid #ffbe00",borderRadius:10,padding:"11px 18px",color:"#ffbe00",fontWeight:700,cursor:movingRoutes?"wait":"pointer",fontSize:13}}>{movingRoutes?(lang==='es'?'Moviendo…':'Moving…'):(lang==='es'?'📅 Mover ruta a hoy':'📅 Move route to today')}</button>}
+                {!isViewer&&routes.length>0&&<button onClick={()=>setShowClearConfirm(true)} style={{background:"#ff334822",border:"1px solid #ff3348",borderRadius:10,padding:"11px 16px",color:"#ff3348",fontWeight:600,cursor:"pointer",fontSize:13}}>{t.clearRouteBtn}</button>}
+                {routes.length>0&&<button onClick={()=>openReportLang('route')} style={{background:"#00dc8522",border:"1px solid #00dc85",borderRadius:10,padding:"11px 16px",color:"#00dc85",fontWeight:600,cursor:"pointer",fontSize:13}}>{t.excelLabel}</button>}
+                {!isViewer&&<div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                  <label style={{fontSize:11,color:C.dim,fontWeight:800}}>{lang==='es'?'Fecha de ruta':'Route date'}</label>
+                  <input type="date" value={importRouteDate} onChange={e=>selectRouteDate(e.target.value)} style={{background:'#0e1e3a',border:'1px solid #162e58',borderRadius:8,padding:'8px 10px',color:C.text,fontSize:12}}/>
+                  <button onClick={()=>selectRouteDate(getDefaultImportRouteDate())} style={{background:'#0e1e3a',border:'1px solid #162e58',borderRadius:8,padding:'8px 10px',color:C.dim,fontSize:11,fontWeight:800}}>{lang==='es'?'Auto':'Auto'}</button>
+                </div>}
+                {!isViewer&&<div style={{alignSelf:'center',fontSize:11,color:C.dim,maxWidth:520}}>{routeUploadWindowLabel} · {lang==='es'?'Importar/Publicar está abierto. Borrar ruta requiere sesión Super Admin + frase.':'Import/Publish is open. Delete route requires an active Super Admin session + confirmation phrase.'}</div>}
+              </div>
+              {routes.length>0&&(
+                <div className="supervisor-route-stats" style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                  <Stat label={t.techsLabel} value={techList.length} color={"#00b8f5"} emoji={"👷"}/>
+                  <Stat label={t.totalJobsLabel} value={routes.length} color={"#ffbe00"} emoji={"📋"}/>
+                  <Stat label={t.completedLabel} value={routes.filter(r=>r.status==='done').length} color={"#00dc85"} emoji={"✅"}/>
+                  <Stat label={t.notCompletedLabel} value={routes.filter(r=>r.status==='notdone').length} color={"#ff3348"} emoji={"❌"}/>
+                </div>
+              )}
+            </div>
+            <div className="supervisor-route-tech-list">
+            {techList.length===0?(
+              <div style={{background:C.card,border:"1px solid #162e58",borderRadius:14,padding:"40px 20px",textAlign:"center",color:C.dim}}>{t.noRouteMsg}</div>
+            ):techList.map(({techId:tid,jobs})=>{
+              const done=jobs.filter(j=>j.status==='done');const notd=jobs.filter(j=>j.status==='notdone');const pend=jobs.filter(j=>j.status==='pending');
+              const earned=done.reduce((s,j)=>s+(j.pay_total||0),0);const pct=jobs.length>0?Math.round(((done.length+notd.length)/jobs.length)*100):0;const isOpen=expandedTech===tid;
+              return(
+                <div className="supervisor-tech-card" key={tid} style={{background:C.card,border:"1px solid #162e58",borderRadius:14,overflow:"hidden"}}>
+                  <div className="supervisor-tech-header" onClick={()=>setExpandedTech(isOpen?null:tid)} style={{padding:"14px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:12}} onMouseEnter={e=>e.currentTarget.style.background="#0e1e3a"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <div style={{width:40,height:40,borderRadius:"50%",background:"linear-gradient(135deg,#0040a8,#00b8f5)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,color:"#fff",fontSize:13,flexShrink:0}}>{tid}</div>
+                    <div style={{flex:1}}>
+                      <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:16,fontWeight:800,color:C.text}}>{getTechName(tid)}</div>
+                      <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
+                        {[{v:done.length,c:"#00dc85",l:"✅"},{v:notd.length,c:"#ff3348",l:"❌"},{v:pend.length,c:"#ffbe00",l:"⏳"}].map((s,i)=>(
+                          <span key={i} style={{background:`${s.c}22`,border:`1px solid ${s.c}44`,borderRadius:20,padding:"2px 8px",fontSize:11,color:s.c,fontWeight:700}}>{s.l} {s.v}</span>
+                        ))}
+                        {earned>0&&<span style={{background:"#00b8f522",border:"1px solid #00b8f544",borderRadius:20,padding:"2px 8px",fontSize:11,color:"#00b8f5",fontWeight:700}}>${earned}</span>}
+                      </div>
+                      <div style={{height:4,background:"#2e4470",borderRadius:99,overflow:"hidden",marginTop:6}}><div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,#00b8f5,#00dc85)",borderRadius:99}}/></div>
+                    </div>
+                    <div style={{color:C.dim,fontSize:18,transform:isOpen?"rotate(90deg)":"rotate(0)",transition:"transform .2s"}}>›</div>
+                    <div className="supervisor-tech-actions" style={{display:"flex",gap:5}} onClick={e=>e.stopPropagation()}>
+                      <button onClick={()=>generateRoutePDFLazy(routes,supPhotos,getTechName(tid),tid,lang,null)} style={{background:"none",border:"1px solid #ff5a1f44",borderRadius:8,padding:"5px 9px",color:"#ff5a1f",cursor:"pointer",fontSize:12}}>📄</button>
+                      <button onClick={()=>generateRouteExcelLazy(routes,supPhotos,lang,tid)} style={{background:"none",border:"1px solid #00dc8544",borderRadius:8,padding:"5px 9px",color:"#00dc85",cursor:"pointer",fontSize:12}}>📥</button>
+                      {!isViewer&&<button onClick={()=>{setBulkReassignFrom(tid);setBulkReassignTo('');}} style={{background:"none",border:"1px solid #ffbe0044",borderRadius:8,padding:"5px 9px",color:"#ffbe00",cursor:"pointer",fontSize:11,fontWeight:700}} title={lang==='es'?'Reasignar toda la ruta':'Reassign entire route'}>🔄 {lang==='es'?'Mover todos':'Move all'}</button>}
+                    </div>
+                  </div>
+                  {isOpen&&(
+                    <div style={{borderTop:"1px solid #162e58",padding:"10px 12px",display:"flex",flexDirection:"column",gap:6}}>
+                      {jobs.map(job=>{
+                        const sc=job.status==='done'?"#00dc85":job.status==='notdone'?"#ff3348":"#5a7aaa";
+                        return(
+                          <div id={`route-job-${job.job_id}`} key={job.id} style={{background:"#0e1e3a",borderRadius:10,padding:"10px 12px",border:`${routeFocusJob&&String(routeFocusJob)===String(job.job_id)?2:1}px solid ${routeFocusJob&&String(routeFocusJob)===String(job.job_id)?'#ffffff':sc+'33'}`,boxShadow:routeFocusJob&&String(routeFocusJob)===String(job.job_id)?'0 0 0 3px rgba(255,255,255,.10)':'none',scrollMarginTop:90}}>
+                            <div style={{display:"flex",alignItems:"center",gap:8}}>
+                              <div style={{width:8,height:8,borderRadius:"50%",background:sc,flexShrink:0}}/>
+                              <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:14,fontWeight:800,color:"#00b8f5"}}>#{job.job_id}</span>
+                              <span style={{fontSize:11,color:"#00b8f5"}}>{job.type?.includes("FIBER")?"FIBER":"COAX"}</span>
+                              <span style={{fontSize:12,color:sc,marginLeft:"auto",fontWeight:700}}>{job.status==='done'?`${job.pay_code} $${job.pay_total}`:job.status==='notdone'?'❌':'⏳'}</span>
+                            </div>
+                            <div style={{fontSize:13,color:"#ffffff",fontWeight:900,marginTop:4}}>{job.address}{job.city?`, ${job.city}`:''}</div>
+                            <div style={{fontSize:12,color:"#ffffff",fontWeight:800,marginTop:2}}>👷 {getTechName(job.tech_id)} · Tech #{job.tech_id}</div>
+                            {job.phone&&<div style={{fontSize:11,color:C.dim}}>📞 {job.phone}</div>}
+                            {job.reason&&<div style={{fontSize:11,color:"#ff3348",marginTop:2}}>❌ {job.reason}</div>}
+                            {job.job_note&&<div style={{fontSize:11,color:"#00b8f5",marginTop:2}}>📝 {job.job_note}</div>}
+                            <JobPhotoGallery photos={supPhotos.filter(p=>p.route_id===job.id)} job={job} lang={lang}/>
+                            <div className="supervisor-job-actions" style={{display:"flex",gap:6,marginTop:8}}>
+                              <button onClick={()=>generateJobPDFLazy(job,supPhotos.filter(p=>p.route_id===job.id),getTechName(job.tech_id),lang,null)} style={{background:"none",border:"1px solid #ff5a1f44",borderRadius:6,padding:"4px 10px",color:"#ff5a1f",cursor:"pointer",fontSize:11}}>📄 PDF</button>
+                              <button onClick={()=>generateJobExcelLazy(job,supPhotos.filter(p=>p.route_id===job.id),lang)} style={{background:"none",border:"1px solid #00b8f544",borderRadius:6,padding:"4px 10px",color:"#00b8f5",cursor:"pointer",fontSize:11}}>📥 XLS</button>
+                              {!isViewer&&<button onClick={()=>openEditJob(job)} style={{background:'none',border:'1px solid #00b8f544',borderRadius:6,padding:'4px 10px',color:'#00b8f5',cursor:'pointer',fontSize:11}}>✏️ {lang==='es'?'Editar':'Edit'}</button>}
+                              {!isViewer&&<button onClick={()=>{setReassignJob(job);setReassignTech(job.tech_id||'');}} style={{background:'none',border:'1px solid #ffbe0044',borderRadius:6,padding:'4px 10px',color:'#ffbe00',cursor:'pointer',fontSize:11}}>🔄 {lang==='es'?'Mover':'Move'}</button>}
+                              {!isViewer&&(job.status==='done'||job.status==='notdone')&&<button onClick={()=>reopenJob(job)} style={{background:'none',border:'1px solid #00dc8544',borderRadius:6,padding:'4px 10px',color:'#00dc85',cursor:'pointer',fontSize:11}}>🔓 {lang==='es'?'Reabrir':'Reopen'}</button>}
+                              {isAdmin&&<button onClick={()=>{setDeleteJobTarget(job);setDeleteJobPin('');setDeleteJobPhrase('');}} style={{background:'none',border:'1px solid #ff334866',borderRadius:6,padding:'4px 10px',color:'#ff3348',cursor:'pointer',fontSize:11}}>🗑️ {lang==='es'?'Eliminar':'Delete'}</button>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════ MAP TAB — Leaflet + OpenStreetMap ══════════════════════════ */}
+        {activeTab==="map"&&(
+          <JobsMapView routes={routes} techLocations={techLocations} lang={lang}/>
+        )}
+
+        {/* ══════════════════════════ REPORTS TAB ══════════════════════════ */}
+        {activeTab==="reports"&&(
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:18,fontWeight:700,color:C.text}}>{reports.filter(r=>r.status!=='eod').length} {t.reportsTab}</span>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button onClick={async()=>{const rl=reports.filter(r=>r.status!=='eod');const blob=await reportsBuildDocx(rl,actorName);reportsDownload(blob,'not_done_report_'+new Date().toLocaleDateString('en-CA')+'.docx');}} style={{background:"#00b8f5",border:"none",borderRadius:10,padding:"8px 16px",color:"#04091c",fontWeight:700,cursor:"pointer",fontSize:13}}>📥 Word</button>
+        <button onClick={()=>{const rl=reports.filter(r=>r.status!=='eod');reportsDownload(new Blob([reportsBuildTxt(rl)],{type:'text/plain;charset=utf-8'}),'not_done_report_'+new Date().toLocaleDateString('en-CA')+'.txt');}} style={{background:"#9d5fff",border:"none",borderRadius:10,padding:"8px 16px",color:"#fff",fontWeight:700,cursor:"pointer",fontSize:13}}>📄 TXT</button>
+        <button onClick={()=>openReportLang('notdone')} style={{background:"#00dc85",border:"none",borderRadius:10,padding:"8px 16px",color:"#04091c",fontWeight:700,cursor:"pointer",fontSize:13}}>{t.excelLabel}</button>
+      </div>
+            </div>
+            {reports.filter(r=>r.status!=='eod').length===0?(
+              <div style={{background:C.card,border:"1px solid #162e58",borderRadius:14,padding:"40px",textAlign:"center",color:C.dim}}>{t.noReportsMsg}</div>
+            ):reports.filter(r=>r.status!=='eod').map(r=>(
+              <div key={r.id} style={{background:C.card,border:"1px solid #ff334833",borderRadius:12,padding:"14px 16px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6}}>
+                  <div>
+                    <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:15,fontWeight:800,color:C.text}}>{r.tech_name} <span style={{color:C.dim,fontWeight:400}}>#{r.tech_id}</span></div>
+                    <div style={{fontSize:12,color:"#ff3348",fontWeight:600}}>{r.reason}</div>
+                    <div style={{fontSize:12,color:C.dim}}>{r.job_id} · {r.address}</div>
+                    {r.notes&&<div style={{fontSize:12,color:C.dim,marginTop:4}}>📝 {r.notes}</div>}
+                  </div>
+                  <div style={{textAlign:"right"}}><div style={{fontSize:11,color:C.dim}}>{new Date(r.created_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {activeTab==="notdone_pool"&&(<NotDonePoolView region={region} lang={lang} actorName={actorName}/>)}
+        {activeTab==="admin_console"&&(<AdminConsole lang={lang} auth={auth}/>)}
+
+        {activeTab==="rit"&&(<Suspense fallback={<ModuleLoader/>}><RouteIntelligencePage region={region} lang={lang} actorName={actorName} readOnly={isViewer} onPublished={loadAll}/></Suspense>)}
+
+        {activeTab==="tools"&&(
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div style={{background:'linear-gradient(135deg,#0a1e40,#071428)',border:'1px solid #1e3560',borderRadius:16,padding:'20px 22px'}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,fontWeight:900,color:C.text}}>🧩 {lang==='es'?'Herramientas del supervisor':'Supervisor Tools'}</div>
+              <div style={{fontSize:12,color:C.dim,marginTop:4}}>{lang==='es'?'Notes, Add Job, PIN, Recovery, Trace y Control en una sola página.':'Notes, Add Job, PIN, Recovery, Trace and Control in one page.'}</div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(210px,1fr))',gap:12}}>
+              {[
+                !isViewer&&{tab:'notes',emoji:'📝',label:lang==='es'?'Notes / notas':'Notes',desc:lang==='es'?'Enviar notas a técnicos y ver notas del día.':'Send technician notes and review daily notes.',color:'#ffbe00'},
+                !isViewer&&{tab:'addjob',emoji:'➕',label:lang==='es'?'Add Job':'Add Job',desc:lang==='es'?'Agregar trabajos de última hora a la ruta.':'Add last-minute jobs to the route.',color:'#00dc85'},
+                !isViewer&&{tab:'dispatch',emoji:'🚚',label:lang==='es'?'Dispatch':'Dispatch',desc:lang==='es'?'Mover trabajos entre técnicos con sugerencias rápidas.':'Move jobs between technicians with quick suggestions.',color:'#00e0d4'},
+                !isViewer&&{tab:'pins',emoji:'🔑',label:'PIN',desc:lang==='es'?'Administrar PIN de técnicos.':'Manage technician PINs.',color:'#00b8f5'},
+                {tab:'recovery',emoji:'📲',label:lang==='es'?'Recovery':'Recovery',desc:lang==='es'?'Clientes ausentes y mensajes manuales.':'Customer recovery and manual messages.',color:'#9d5fff'},
+                !isViewer&&{tab:'activity',emoji:'🧾',label:lang==='es'?'Trace':'Trace',desc:lang==='es'?'Trazabilidad y auditoría de acciones.':'Trace and audit user actions.',color:'#c39dff'},
+                {tab:'controls',emoji:'⚙️',label:lang==='es'?'Control':'Control',desc:lang==='es'?'Importar, archivar y acciones críticas.':'Import, archive and protected actions.',color:'#ff5a1f'},
+                {tab:'admin_console',emoji:'🛠️',label:lang==='es'?'Administración':'Admin Console',desc:lang==='es'?'Técnicos y roles (solo Super Admin).':'Technicians and roles (Super Admin only).',color:'#00b8f5'},
+              ].filter(Boolean).map((card:any)=>(
+                <button key={card.tab} onClick={()=>setActiveTab(card.tab)} style={{background:C.card,border:`1px solid ${card.color}55`,borderRadius:14,padding:'16px',textAlign:'left',cursor:'pointer',minHeight:130,display:'flex',flexDirection:'column',justifyContent:'space-between'}}>
+                  <div><div style={{fontSize:28,marginBottom:8}}>{card.emoji}</div><div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:20,fontWeight:900,color:'#fff'}}>{card.label}</div><div style={{fontSize:12,color:C.dim,lineHeight:1.45,marginTop:5}}>{card.desc}</div></div>
+                  <div style={{fontSize:11,color:card.color,fontWeight:900,marginTop:12}}>{lang==='es'?'ABRIR →':'OPEN →'}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════ NOTES TAB ══════════════════════════ */}
+        {activeTab==="notes"&&!isViewer&&(
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{background:C.card,border:"1px solid #162e58",borderRadius:14,padding:"16px"}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:15,fontWeight:700,color:C.text,marginBottom:12}}>{t.sendNoteBtn}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div>
+                  <label style={{fontSize:12,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:6,display:"block"}}>{t.noteTypeLabel}</label>
+                  <div style={{display:"flex",gap:5}}>
+                    {Object.entries(NOTE_TYPES).map(([k,v])=>(
+                      <button key={k} onClick={()=>setNoteForm(f=>({...f,type:k}))}
+                        style={{flex:1,background:noteForm.type===k?v.bg:"#0e1e3a",border:`1.5px solid ${noteForm.type===k?v.color:"#162e58"}`,borderRadius:8,padding:"8px 4px",cursor:"pointer",fontSize:11,color:noteForm.type===k?v.color:"#5a7aaa",fontWeight:600}}>
+                        {v.icon}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={{fontSize:12,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:6,display:"block"}}>{t.forTechLabel}</label>
+                  <select style={{background:"#0e1e3a",border:"1px solid #162e58",borderRadius:10,padding:"12px 14px",color:C.text,fontSize:13,width:"100%",boxSizing:"border-box" as const,fontFamily:"'Barlow',sans-serif",outline:"none",appearance:"none" as const}} value={noteForm.tech_id} onChange={e=>setNoteForm(f=>({...f,tech_id:e.target.value}))}>
+                    <option value="">{t.allTechsLabel}</option>
+                    {regionTechs.map((tech:any)=><option key={tech.id} value={tech.id}>{tech.id} — {tech.name}</option>)}
+                  </select>
+                </div>
+              </div>
+              <label style={{fontSize:12,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:6,display:"block"}}>{t.noteContentLabel}</label>
+              <textarea style={{background:"#0e1e3a",border:"1px solid #162e58",borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,width:"100%",boxSizing:"border-box" as const,fontFamily:"'Barlow',sans-serif",outline:"none",minHeight:80,resize:"vertical",marginBottom:10}} placeholder={t.notePH} value={noteForm.content} onChange={e=>setNoteForm(f=>({...f,content:e.target.value}))}/>
+              <button onClick={addNote} style={{background:NOTE_TYPES[noteForm.type]?.color||"#00dc85",border:"none",borderRadius:10,padding:"12px",color:"#04091c",fontWeight:700,cursor:"pointer",width:"100%",fontSize:14}}>{t.sendNoteBtn}</button>
+            </div>
+            {notes.length>0&&(
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:14,fontWeight:700,color:C.text}}>{t.todayNotesTitle}</div>
+                {notes.map(n=>{const nt=NOTE_TYPES[n.type]||NOTE_TYPES.recommendation;return(
+                  <div key={n.id} style={{background:nt.bg,border:`1px solid ${nt.border}`,borderRadius:10,padding:"12px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:11,color:nt.color,fontWeight:700,textTransform:"uppercase"}}>{nt.icon} {nt.label}</span><span style={{fontSize:11,color:C.dim}}>{n.tech_id?`Tech #${n.tech_id}`:t.allTechsLabel}</span></div>
+                    <div style={{fontSize:13,color:C.text}}>{n.content}</div>
+                  </div>
+                );})}
+              </div>
+            )}
+            <div style={{background:C.card,border:"1px solid #162e58",borderRadius:16,padding:"20px"}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:16,fontWeight:800,color:C.text,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
+                {t.techNotesSupTitle}{techNotes.length>0&&<span style={{background:"#00b8f522",border:"1px solid #00b8f544",borderRadius:20,padding:"1px 9px",fontSize:12,color:C.accent,fontWeight:700}}>{techNotes.length}</span>}
+              </div>
+              {techNotes.length===0?(<div style={{textAlign:"center",padding:"20px 0",color:C.dim,fontSize:13}}>{t.techNotesSupEmpty}</div>):(
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {techNotes.map(n=>(
+                    <div key={n.id} style={{background:"#0e1e3a",border:"1px solid #00b8f533",borderRadius:10,padding:"12px 14px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,gap:8,flexWrap:"wrap" as const}}>
+                        <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:13,fontWeight:800,color:C.accent}}>{n.tech_name} <span style={{color:C.dim,fontWeight:400,fontSize:12}}>#{n.tech_id}</span></span>
+                        <span style={{fontSize:11,color:C.dim}}>{new Date(n.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>
+                      </div>
+                      <div style={{fontSize:13,color:C.text,lineHeight:1.5}}>{n.content}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab==="recovery"&&<CustomerRecoveryQueue region={region} lang={lang} actorName={actorName} actorRole={effectiveRole}/>}
+        {activeTab==="dispatch"&&<Suspense fallback={<ModuleLoader/>}><DispatchPage region={region} lang={lang} readOnly={isViewer} actorName={actorName}/></Suspense>}
+        {activeTab==="operations"&&<Suspense fallback={<ModuleLoader/>}><OperationsCenter region={region} lang={lang} readOnly={isViewer} actorName={actorName} actorId={auth?.sessionUserId}/></Suspense>}
+        {activeTab==="security_admin"&&isAdmin&&secureAuth&&<Suspense fallback={<ModuleLoader/>}><SecurityAdminPage region={region} lang={lang} actorName={actorName}/></Suspense>}
+        {activeTab==="search"&&<SearchTab lang={lang} region={region} initialQuery={hashSub||undefined}/>}
+
+        {activeTab==="db"&&<DatabaseView lang={lang} region={region} initialTable={hashSub||undefined} onTableChange={t=>setActiveTab('db',t)}/>}
+
+        {/* ══════════════════════════ PINS TAB ══════════════════════════ */}
+        {activeTab==="pins"&&!isViewer&&(
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            <div style={{background:"linear-gradient(135deg,#0a1e40,#071428)",border:"1px solid #1e3560",borderRadius:16,padding:"20px 22px"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap" as const}}>
+                <div>
+                  <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:22,fontWeight:900,color:C.text,marginBottom:4}}>🔑 {t.pinMgmtTitle}</div>
+                  <div style={{fontSize:12,color:C.dim}}>{regionInfo.emoji} {regionInfo.name} — {dbTechs.filter(tt=>tt.pin).length}/{regionTechs.length} con PIN</div>
+                </div>
+                <button onClick={autoAssignPins} disabled={pinSaving}
+                  style={{background:"linear-gradient(135deg,#0040c0,#00b8f5)",border:"none",borderRadius:10,padding:"10px 18px",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer",opacity:pinSaving?0.6:1,whiteSpace:"nowrap" as const}}>
+                  {pinSaving?"⏳ Asignando...":"🎲 Auto-asignar PINs"}
+                </button>
+              </div>
+            </div>
+            <div style={{background:C.card,border:"1px solid #162e58",borderRadius:16,overflow:"hidden"}}>
+              <div style={{padding:"12px 18px",borderBottom:"1px solid #162e58",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:14,fontWeight:700,color:C.text}}>Técnicos — {regionInfo.name}</span>
+                <span style={{fontSize:11,color:C.dim}}>{dbTechs.filter(tt=>tt.pin).length}/{regionTechs.length} con PIN</span>
+              </div>
+              {regionTechs.map(tech=>{
+                const dbTech=dbTechs.find(tt=>tt.id===tech.id);const hasPin=!!(dbTech?.pin);const isEditing=pinEditing===tech.id;
+                return(
+                  <div key={tech.id} style={{padding:"14px 18px",borderBottom:"1px solid #162e5812",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" as const}}>
+                    <div style={{width:38,height:38,borderRadius:"50%",background:"linear-gradient(135deg,#0040a8,#00b8f5)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,color:"#fff",fontSize:11,flexShrink:0}}>{tech.id}</div>
+                    <div style={{flex:1,minWidth:120}}>
+                      <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:14,fontWeight:800,color:C.text}}>{tech.name}</div>
+                      <div style={{fontSize:10,color:C.dim}}>#{tech.id}</div>
+                    </div>
+                    {!isEditing&&(
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{background:hasPin?"#00dc8518":"#ff334818",border:`1px solid ${hasPin?"#00dc8544":"#ff334444"}`,borderRadius:20,padding:"3px 10px",fontSize:11,fontWeight:700,color:hasPin?"#00dc85":"#ff3348",whiteSpace:"nowrap" as const,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:hasPin?2:0}}>
+                          {hasPin?`🔑 ••••`:`❌ ${t.noPin}`}
+                        </div>
+                        <button onClick={()=>{setPinEditing(tech.id);setPinInput('');}} style={{background:C.card2,border:"1px solid #1e3560",borderRadius:8,padding:"6px 12px",color:C.accent,fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap" as const}}>{hasPin?t.changePin:t.assignPin}</button>
+                        {hasPin&&<button onClick={()=>deletePin(tech.id)} style={{background:"#ff334818",border:"1px solid #ff334433",borderRadius:8,padding:"6px 8px",color:"#ff3348",fontSize:12,cursor:"pointer"}}>🗑</button>}
+                      </div>
+                    )}
+                    {isEditing&&(
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                        <input type="text" inputMode="numeric" maxLength={6} placeholder="4-6 dígitos"
+                          style={{background:"#0e1e3a",border:"1px solid #00b8f555",borderRadius:8,padding:"7px 12px",color:C.text,fontSize:14,fontWeight:700,width:110,textAlign:"center",outline:"none",fontFamily:"'Barlow',sans-serif",letterSpacing:3}}
+                          value={pinInput} onChange={e=>setPinInput(e.target.value.replace(/\D/g,''))}
+                          onKeyDown={e=>e.key==='Enter'&&savePin(tech.id)} autoFocus/>
+                        <button onClick={()=>savePin(tech.id)} disabled={pinSaving} style={{background:"#00dc85",border:"none",borderRadius:8,padding:"7px 14px",color:"#04091c",fontSize:12,fontWeight:800,cursor:"pointer",opacity:pinSaving?0.6:1}}>{pinSaving?t.savingPin:"✅"}</button>
+                        <button onClick={()=>{setPinEditing(null);setPinInput('');}} style={{background:"none",border:"1px solid #162e58",borderRadius:8,padding:"7px 10px",color:C.dim,fontSize:12,cursor:"pointer"}}>✕</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {/* ══ ADD JOB TAB ══ */}
+        {activeTab==="addjob"&&!isViewer&&(
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+              <button onClick={()=>setActiveTab('dashboard')} style={{background:"#0e1e3a",border:"1px solid #162e58",borderRadius:8,padding:"6px 12px",color:C.dim,cursor:"pointer",fontSize:13}}>← {lang==='es'?'Dashboard':'Dashboard'}</button>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:18,fontWeight:900,color:"#00dc85"}}>➕ {lang==='es'?'Agregar Trabajo de Última Hora':'Add Last-Minute Job'}</div>
+            </div>
+            <div style={{background:C.card,border:"1px solid #162e58",borderRadius:16,padding:"20px"}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:15,fontWeight:700,color:C.text,marginBottom:12}}>{t.addJobTitle}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div>
+                  <label style={{fontSize:12,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:6,display:"block"}}>{t.techNumShort}</label>
+                  <select style={{background:"#0e1e3a",border:"1px solid #162e58",borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,width:"100%",boxSizing:"border-box" as const,fontFamily:"'Barlow',sans-serif",outline:"none",appearance:"none" as const}} value={addJobForm.tech_id} onChange={e=>setAddJobForm(f=>({...f,tech_id:e.target.value}))}>
+                    <option value="">--</option>
+                    {regionTechs.map((tech:any)=><option key={tech.id} value={tech.id}>{tech.id} — {tech.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{fontSize:12,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:6,display:"block"}}>{t.jobNumShort}</label>
+                  <input style={{background:"#0e1e3a",border:"1px solid #162e58",borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,width:"100%",boxSizing:"border-box" as const,fontFamily:"'Barlow',sans-serif",outline:"none"}} placeholder="JOB-XXXXX" value={addJobForm.job_id} onChange={e=>setAddJobForm(f=>({...f,job_id:e.target.value}))}/>
+                </div>
+              </div>
+              <label style={{fontSize:12,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:6,display:"block"}}>{t.addrLabel}</label>
+              <input style={{background:"#0e1e3a",border:"1px solid #162e58",borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,width:"100%",boxSizing:"border-box" as const,fontFamily:"'Barlow',sans-serif",outline:"none",marginBottom:8}} value={addJobForm.address} onChange={e=>setAddJobForm(f=>({...f,address:e.target.value}))}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                <div>
+                  <label style={{fontSize:12,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:6,display:"block"}}>{t.cityLabel}</label>
+                  <input style={{background:"#0e1e3a",border:"1px solid #162e58",borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,width:"100%",boxSizing:"border-box" as const,fontFamily:"'Barlow',sans-serif",outline:"none"}} placeholder="Miami" value={addJobForm.city} onChange={e=>setAddJobForm(f=>({...f,city:e.target.value}))}/>
+                </div>
+                <div>
+                  <label style={{fontSize:12,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:6,display:"block"}}>{t.phoneLabel}</label>
+                  <input style={{background:"#0e1e3a",border:"1px solid #162e58",borderRadius:10,padding:"12px 14px",color:C.text,fontSize:14,width:"100%",boxSizing:"border-box" as const,fontFamily:"'Barlow',sans-serif",outline:"none"}} placeholder="(305)..." value={addJobForm.phone} onChange={e=>setAddJobForm(f=>({...f,phone:e.target.value}))}/>
+                </div>
+              </div>
+              <button onClick={addManualJob} style={{background:"#00dc85",border:"none",borderRadius:10,padding:"12px",color:"#04091c",fontWeight:700,cursor:"pointer",width:"100%",fontSize:14}}>{t.addJobBtn}</button>
+            </div>
+          </div>
+        )}
+        {/* ══ ROUTE ARCHIVE TAB ══ */}
+        {activeTab==="archive"&&(<RouteArchive region={region} lang={lang} actorName={actorName} actorRole={effectiveRole} readOnly={isViewer} auth={auth} onBack={()=>setActiveTab('dashboard')}/>)}
+        {activeTab==="activity"&&(<AuditTrailView region={region} lang={lang}/>)}
+        {activeTab==="controls"&&(<div style={{display:'flex',flexDirection:'column',gap:14}}><div style={{background:C.card,border:'1px solid #162e58',borderRadius:14,padding:'16px'}}><div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:18,fontWeight:900,color:C.text}}>⚙️ {lang==='es'?'Centro de control':'Control center'}</div><div style={{fontSize:12,color:C.dim,margin:'6px 0 14px'}}>{lang==='es'?'Resumen del acceso actual y acciones críticas protegidas.':'Summary of current access and protected critical actions.'}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10}}><div style={{background:'#0e1e3a',border:'1px solid #162e58',borderRadius:10,padding:'12px'}}><div style={{fontSize:10,color:C.dim}}>{lang==='es'?'Rol actual':'Current role'}</div><div style={{fontSize:24,fontWeight:900,color:'#00b8f5'}}>{String(effectiveRole).toUpperCase()}</div></div><div style={{background:'#0e1e3a',border:'1px solid #162e58',borderRadius:10,padding:'12px'}}><div style={{fontSize:10,color:C.dim}}>{lang==='es'?'Usuario':'User'}</div><div style={{fontSize:18,fontWeight:900,color:C.text}}>{actorName}</div></div><div style={{background:'#0e1e3a',border:'1px solid #162e58',borderRadius:10,padding:'12px'}}><div style={{fontSize:10,color:C.dim}}>{lang==='es'?'Región':'Region'}</div><div style={{fontSize:18,fontWeight:900,color:'#00dc85'}}>{regionInfo.name}</div></div></div><div style={{marginTop:14,display:'flex',gap:8,flexWrap:'wrap'}}>{!isViewer&&<button onClick={()=>fileRef.current?.click()} style={{background:'linear-gradient(135deg,#0040c0,#00b8f5)',border:'none',borderRadius:10,padding:'10px 14px',color:'#fff',fontWeight:700,cursor:'pointer'}}>{lang==='es'?'Importar ruta':'Import route'}</button>}{!isViewer&&routes.length>0&&<button onClick={()=>setShowClearConfirm(true)} style={{background:'#ff334822',border:'1px solid #ff3348',borderRadius:10,padding:'10px 14px',color:'#ff3348',fontWeight:700,cursor:'pointer'}}>{lang==='es'?'Archivar y borrar ruta':'Archive & clear route'}</button>}<button onClick={()=>setActiveTab('activity')} style={{background:'#9d5fff22',border:'1px solid #9d5fff',borderRadius:10,padding:'10px 14px',color:'#c39dff',fontWeight:700,cursor:'pointer'}}>{lang==='es'?'Ver trazas':'View trace'}</button></div><div style={{marginTop:12,fontSize:11,color:C.dim}}>{lang==='es'?'Importar/Publicar ruta está abierto. Borrar ruta requiere sesión Super Admin activa y la frase DELETE ROUTE.':'Import/Publish route is open. Delete route requires an active Super Admin session plus the DELETE ROUTE confirmation phrase.'}</div></div></div>)}
+        {/* ══ COMPLETED JOBS VIEW ══ */}
+        {activeTab==="completed_jobs"&&(
+          <CompletedJobsTab doneJobs={doneJobs} lang={lang} supPhotos={supPhotos} onBack={()=>setActiveTab('dashboard')}/>
+        )}
+
+        {/* ══ PENDING JOBS VIEW ══ */}
+        {activeTab==="pending_jobs"&&(
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+              <button onClick={()=>setActiveTab('dashboard')} style={{background:"#0e1e3a",border:"1px solid #162e58",borderRadius:8,padding:"6px 12px",color:C.dim,cursor:"pointer",fontSize:13}}>← {lang==='es'?'Dashboard':'Dashboard'}</button>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:18,fontWeight:900,color:"#ffbe00"}}>⏳ {lang==='es'?`Trabajos Pendientes (${pendingJobs.length})`:`Pending Jobs (${pendingJobs.length})`}</div>
+            </div>
+            {pendingJobs.length===0?(
+              <div style={{background:C.card,border:"1px solid #162e58",borderRadius:14,padding:"40px",textAlign:"center",color:"#00dc85",fontSize:15,fontWeight:700}}>🎉 {lang==='es'?'¡Sin pendientes! Todos los trabajos están resueltos.':'No pending jobs! All jobs resolved.'}</div>
+            ):pendingJobs.map((job,i)=>(
+              <div key={job.id} style={{background:C.card,border:"1px solid #ffbe0033",borderRadius:12,padding:"14px 16px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,flexWrap:"wrap"}}>
+                  <div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4}}>
+                      <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:16,fontWeight:900,color:"#ffbe00"}}>#{job.job_id}</span>
+                      <span style={{background:"#ffbe0022",borderRadius:20,padding:"2px 8px",fontSize:10,color:"#ffbe00",fontWeight:700}}>{job.type?.includes('FIBER')?'FIBER':'COAX'}</span>
+                      <span style={{fontSize:10,color:C.dim}}>#{job.order_num+1}</span>
+                    </div>
+                    <div style={{fontSize:14,color:"#ffffff",fontWeight:900}}>{job.address}{job.city?`, ${job.city}`:''}</div>
+                    <div style={{fontSize:12,color:"#ffffff",fontWeight:800,marginTop:3}}>👷 {getTechName(job.tech_id)} · Tech #{job.tech_id}</div>
+                    {job.phone&&<div style={{fontSize:11,color:C.dim}}>📞 {job.phone}</div>}
+                  </div>
+                  <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(job.address+(job.city?', '+job.city:''))}`}
+                    target="_blank" rel="noopener noreferrer"
+                    style={{background:"#00b8f518",border:"1px solid #00b8f544",borderRadius:8,padding:"8px 12px",color:"#00b8f5",fontSize:12,fontWeight:700,textDecoration:"none",flexShrink:0}}>
+                    🗺️ Maps
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ══ EARNINGS VIEW ══ */}
+        {activeTab==="earnings"&&(
+          <EarningsView routes={routes} lang={lang} onBack={()=>setActiveTab('dashboard')} region={region}/>
+        )}
+
+
+      </div>
+    </div>
+  );
+}
+
+export default SupervisorPortal;
