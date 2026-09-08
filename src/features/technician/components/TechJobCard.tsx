@@ -85,7 +85,7 @@ function TechJobCard({job,notes,onMarkDone,onMarkNotDone,onReopen,onNotifyCustom
   const canConfirm=selectedCodes.length>0&&selectedCodes.every(c=>{
     const pc=PAY_CODES.find(p=>p.code===c);
     return !pc?.needsFt||ftValues[c];
-  })&&jobNote.trim().length>0;
+  });
   const queueDoneClose=async()=>{
     await enqueuePendingClose({
       route_id:String(job.id), tech_id:String(techId), job_id:String(job.job_id||''), region:job.region||'',
@@ -157,7 +157,7 @@ function TechJobCard({job,notes,onMarkDone,onMarkNotDone,onReopen,onNotifyCustom
   };
 
   const confirmNotDone=async()=>{
-    if(!reason||!jobNote.trim())return;
+    if(!reason||!cancelNote.trim())return;
     if(!navigator.onLine){
       const queue=window.confirm(es
         ? 'No hay internet. ¿Guardar este Not Done como Pending Close para enviarlo cuando vuelva la señal?'
@@ -198,8 +198,8 @@ function TechJobCard({job,notes,onMarkDone,onMarkNotDone,onReopen,onNotifyCustom
   // Note selector panel (used in both done and not-done)
   const notePanel=(
     <div style={{marginBottom:10}}>
-      <div style={{fontSize:11,color:jobNote.trim()?C.dim:'#ff3348',textTransform:"uppercase",letterSpacing:1,marginBottom:6,fontWeight:jobNote.trim()?400:700}}>
-        📝 {es?'Nota del trabajo (obligatoria)':'Job note (required)'} <span style={{color:'#ff3348'}}>*</span>
+      <div style={{fontSize:11,color:C.dim,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>
+        📝 {es?'Nota del trabajo (opcional)':'Job note (optional)'}
       </div>
       {/* Predefined notes */}
       <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:8}}>
@@ -212,12 +212,11 @@ function TechJobCard({job,notes,onMarkDone,onMarkNotDone,onReopen,onNotifyCustom
       </div>
       {/* Custom note */}
       <textarea
-        placeholder={es?'O escribe tu propia nota... (obligatorio)':'Or write your own note... (required)'}
+        placeholder={es?'O escribe tu propia nota...':'Or write your own note...'}
         value={PRESET_NOTES.includes(jobNote)?'':jobNote}
         onChange={e=>setJobNote(e.target.value)}
-        style={{width:"100%",boxSizing:"border-box",background:"#0a1428",border:`1px solid ${jobNote.trim()?"#162e58":"#ff3348"}`,borderRadius:8,padding:"8px 10px",color:C.text,fontSize:11,fontFamily:"'Barlow',sans-serif",outline:"none",minHeight:44,resize:"vertical"}}
+        style={{width:"100%",boxSizing:"border-box",background:"#0a1428",border:"1px solid #162e58",borderRadius:8,padding:"8px 10px",color:C.text,fontSize:11,fontFamily:"'Barlow',sans-serif",outline:"none",minHeight:44,resize:"vertical"}}
       />
-      {!jobNote.trim()&&<div style={{fontSize:10,color:'#ff3348',marginTop:4}}>{es?'Selecciona o escribe una nota para poder cerrar el trabajo.':'Select or write a note to close the job.'}</div>}
     </div>
   );
 
@@ -368,17 +367,15 @@ function TechJobCard({job,notes,onMarkDone,onMarkNotDone,onReopen,onNotifyCustom
                   </div>
                   {reason&&(
                     <div style={{marginBottom:8}}>
-                      <div style={{fontSize:11,color:C.dim,marginBottom:5}}>{lang==='es'?'Nota adicional (opcional):':'Additional note (optional):'}</div>
-                      <textarea placeholder={lang==='es'?'Detalles de la situación...':'Situation details...'}
+                      <div style={{fontSize:11,color:C.red,marginBottom:5,fontWeight:700}}>{lang==='es'?'¿Por qué no pudiste realizar el trabajo? (obligatorio):':"Why couldn't you complete the job? (required):"}</div>
+                      <textarea placeholder={lang==='es'?'Explica el motivo...':'Explain the reason...'}
                         value={cancelNote} onChange={e=>setCancelNote(e.target.value)}
-                        style={{width:"100%",boxSizing:"border-box",background:"#0a1428",border:"1px solid #00b8f544",borderRadius:8,padding:"10px 12px",color:C.text,fontSize:13,fontFamily:"'Barlow',sans-serif",outline:"none",minHeight:80,resize:"vertical"}}/>
+                        style={{width:"100%",boxSizing:"border-box",background:"#0a1428",border:`1px solid ${cancelNote.trim()?"#00b8f544":"#ff334888"}`,borderRadius:8,padding:"10px 12px",color:C.text,fontSize:13,fontFamily:"'Barlow',sans-serif",outline:"none",minHeight:80,resize:"vertical"}}/>
                     </div>
                   )}
-                  {/* Job note selector */}
-                  {notePanel}
                   <div style={{display:"flex",gap:8}}>
-                    <button onClick={confirmNotDone} disabled={!reason||!jobNote.trim()||saving}
-                      style={{flex:1,background:(reason&&jobNote.trim())?C.red:C.muted,border:"none",borderRadius:8,padding:"11px",color:(reason&&jobNote.trim())?"#fff":C.dim,fontWeight:700,cursor:(reason&&jobNote.trim())?"pointer":"default",fontSize:13}}>
+                    <button onClick={confirmNotDone} disabled={!reason||!cancelNote.trim()||saving}
+                      style={{flex:1,background:(reason&&cancelNote.trim())?C.red:C.muted,border:"none",borderRadius:8,padding:"11px",color:(reason&&cancelNote.trim())?"#fff":C.dim,fontWeight:700,cursor:(reason&&cancelNote.trim())?"pointer":"default",fontSize:13}}>
                       {saving?t.savingLabel:t.confirmBtn}
                     </button>
                     <button onClick={()=>{setMode(null);setReason('');setCancelNote('');setJobNote('');}} style={{background:"none",border:"1px solid #162e58",borderRadius:8,padding:"11px 14px",color:C.dim,cursor:"pointer"}}>✕</button>
