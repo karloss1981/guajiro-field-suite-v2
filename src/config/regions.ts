@@ -141,11 +141,9 @@ export const BROWARD_ZIPS = new Set([
 export const JOB_NOTES_ES = [
   '✅ Trabajo realizado correctamente, hice contacto con el cliente',
   '✅ Trabajo realizado correctamente, no pude hacer contacto con el cliente',
-  '❌ No se pudo realizar el trabajo',
 ];
 
 export const JOB_NOTES_EN = [
   '✅ Job completed correctly, I made contact with the customer',
   '✅ Job completed correctly, no contact with customer',
-  '❌ Job could not be completed',
 ];
