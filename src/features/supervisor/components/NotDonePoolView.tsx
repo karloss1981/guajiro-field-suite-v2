@@ -9,6 +9,7 @@ import { getRitStorageMode } from '../../../services/localRitStore.service';
 import { deriveCity, ZONE_EMOJI, ZONE_COLOR, ZONE_ORDER, type ZoneKey } from '../../../services/city.util';
 import { feedCharlieLearning } from '../../../services/charlieLearning.service';
 import * as XLSX from 'xlsx';
+import { SendToTodoButton } from './TodoPanelView';
 
 function getWeekKey(dateStr: string): string {
   const d = new Date(dateStr + 'T00:00:00');
@@ -551,6 +552,7 @@ export default function NotDonePoolView({ region, lang, actorName = 'supervisor'
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'flex-end' }}>
               <button onClick={() => openCurrentRoute(row)} style={{ background: '#00b8f522', border: '1px solid #00b8f5', borderRadius: 7, padding: '7px 9px', color: '#00b8f5', fontSize: 10, fontWeight: 800 }}>{es ? 'Abrir trabajo' : 'Open job'}</button>
               <button onClick={() => copyLink(row)} style={{ background: '#9d5fff22', border: '1px solid #9d5fff', borderRadius: 7, padding: '7px 9px', color: '#c39dff', fontSize: 10, fontWeight: 800 }}>{copied === String(row.id || row.job_id) ? (es ? 'Copiado' : 'Copied') : '🔗 Link'}</button>
+              <SendToTodoButton job={row} sourceType="notdone" region={region} lang={lang} />
               {['open', 'scheduled'].includes(row.current_status) && <>
                 <button onClick={() => close(row, 'completed')} style={{ background: '#00dc8522', border: '1px solid #00dc85', borderRadius: 7, padding: '7px 9px', color: '#00dc85', fontSize: 10, fontWeight: 800 }}>{es ? 'Resuelto' : 'Resolved'}</button>
                 <button onClick={() => close(row, 'cancelled')} style={{ background: '#8da4c922', border: '1px solid #8da4c9', borderRadius: 7, padding: '7px 9px', color: '#c8d8f4', fontSize: 10, fontWeight: 800 }}>{es ? 'Cancelado' : 'Cancelled'}</button>

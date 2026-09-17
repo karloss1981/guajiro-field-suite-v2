@@ -10,6 +10,7 @@ import DispatchReworkQA from '../components/DispatchReworkQA';
 import DispatchIncidentsCenter from '../components/DispatchIncidentsCenter';
 import { operationsSetupMessage } from '../../../services/operations/schema.service';
 import { parseHash } from '../../../legacy/routing';
+import { SendToTodoButton } from '../../supervisor/components/TodoPanelView';
 
 const AREA_KEY = 'gfs_dispatch_tech_areas_v1';
 const LOCK_KEY = 'gfs_dispatch_assignment_locks_v23';
@@ -359,7 +360,7 @@ export default function DispatchPage({ region, lang, readOnly = false, actorName
                 </div>
               </div>
               <select disabled={readOnly || busy === job.id || isLocked} value={job.tech_id || ''} onChange={e => doAssign(job, e.target.value)} style={{ ...fieldStyle, width: '100%' }}><option value="">{es ? 'Seleccionar técnico' : 'Select technician'}</option>{techs.map(t => <option key={t.id} value={t.id}>{t.name} · #{t.id}</option>)}</select>
-              {!readOnly && <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}><OpsButton disabled={busy === job.id || isLocked} onClick={() => doSmartAssign(job)} tone="green">{busy === job.id ? '…' : 'Smart'}</OpsButton><OpsButton disabled={busy === job.id || isLocked} onClick={() => doAuto(job)} tone="purple">{busy === job.id ? '…' : es ? 'Auto' : 'Auto'}</OpsButton><OpsButton onClick={() => toggleLock(job)} tone={isLocked ? 'yellow' : 'dim'}>{isLocked ? '🔓' : '🔒'}</OpsButton></div>}
+              {!readOnly && <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}><OpsButton disabled={busy === job.id || isLocked} onClick={() => doSmartAssign(job)} tone="green">{busy === job.id ? '…' : 'Smart'}</OpsButton><OpsButton disabled={busy === job.id || isLocked} onClick={() => doAuto(job)} tone="purple">{busy === job.id ? '…' : es ? 'Auto' : 'Auto'}</OpsButton><OpsButton onClick={() => toggleLock(job)} tone={isLocked ? 'yellow' : 'dim'}>{isLocked ? '🔓' : '🔒'}</OpsButton><SendToTodoButton job={job} sourceType="route" region={region} lang={lang} /></div>}
             </div>;
           })}</div>
         </div>)}

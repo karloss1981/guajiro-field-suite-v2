@@ -22,6 +22,7 @@ import SupervisorCloseoutMonitor from '../components/SupervisorCloseoutMonitor';
 import { adminClearTechnicianPin, adminSetTechnicianPin, reauthenticateWithPassword, verifyRoleSecurityPin } from '../../../services/security.service';
 import { addOrRefreshNotDonePool, reconcileNotDonePoolWithRoute, resolveNotDonePool } from '../../../services/notDonePool.service';
 import NotDonePoolView from '../components/NotDonePoolView';
+import TodoPanelView from '../components/TodoPanelView';
 import AdminConsole from '../components/AdminConsole';
 import SuperAdminDeleteGate from '../../../components/SuperAdminDeleteGate';
 import { checkDestructiveAction, logDestructiveActionSuccess } from '../../../services/actionGuard.service';
@@ -1223,6 +1224,7 @@ function SupervisorPortal({onLogout,onSessionExpired,lang,setLang,region,auth,ac
         )}
 
         {activeTab==="notdone_pool"&&(<NotDonePoolView region={region} lang={lang} actorName={actorName}/>)}
+        {activeTab==="todo"&&(<TodoPanelView lang={lang} region={region}/>)}
         {activeTab==="admin_console"&&(<AdminConsole lang={lang} auth={auth}/>)}
 
         {activeTab==="rit"&&(<Suspense fallback={<ModuleLoader/>}><RouteIntelligencePage region={region} lang={lang} actorName={actorName} readOnly={isViewer} onPublished={loadAll}/></Suspense>)}
@@ -1241,6 +1243,7 @@ function SupervisorPortal({onLogout,onSessionExpired,lang,setLang,region,auth,ac
                 !isViewer&&{tab:'pins',emoji:'🔑',label:'PIN',desc:lang==='es'?'Administrar PIN de técnicos.':'Manage technician PINs.',color:'#00b8f5'},
                 {tab:'recovery',emoji:'📲',label:lang==='es'?'Recovery':'Recovery',desc:lang==='es'?'Clientes ausentes y mensajes manuales.':'Customer recovery and manual messages.',color:'#9d5fff'},
                 !isViewer&&{tab:'activity',emoji:'🧾',label:lang==='es'?'Trace':'Trace',desc:lang==='es'?'Trazabilidad y auditoría de acciones.':'Trace and audit user actions.',color:'#c39dff'},
+                {tab:'todo',emoji:'📋',label:lang==='es'?'Seguimiento':'Follow-up',desc:lang==='es'?'To-do con prioridades, fechas, notas y hasta 8 fotos por tarea.':'To-do with priorities, dates, notes and up to 8 photos per task.',color:'#00e0d4'},
                 {tab:'controls',emoji:'⚙️',label:lang==='es'?'Control':'Control',desc:lang==='es'?'Importar, archivar y acciones críticas.':'Import, archive and protected actions.',color:'#ff5a1f'},
                 {tab:'admin_console',emoji:'🛠️',label:lang==='es'?'Administración':'Admin Console',desc:lang==='es'?'Técnicos y roles (solo Super Admin).':'Technicians and roles (Super Admin only).',color:'#00b8f5'},
               ].filter(Boolean).map((card:any)=>(
