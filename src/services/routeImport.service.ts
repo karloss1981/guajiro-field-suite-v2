@@ -28,6 +28,18 @@ export type RouteImportPreview = {
   warnings: string[];
 };
 
+export function extractTechId(raw: unknown): string {
+  const cleaned = String(raw ?? '').trim().replace(/\.0$/, '').toUpperCase();
+  if (!cleaned) return '';
+  const m = cleaned.match(/^([A-Z0-9][A-Z0-9_-]{2,9})(?:\s*[-–—:]\s+\S.*)?$/);
+  if (!m || !/\d/.test(m[1])) return '';
+  return m[1];
+}
+export function isValidTechId(raw: unknown): boolean {
+  const id = String(raw ?? '').trim().toUpperCase();
+  return !!id && extractTechId(id) === id;
+}
+
 function normalizeHeader(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -211,17 +223,11 @@ export async function parseRouteImport(file: File, region: string, routeDate = n
   let duplicateJobCount = 0;
   let invalidPhoneCount = 0;
   let invalidTechCount = 0;
-  // V25.2 hard rule: a technician id is EXACTLY 4 digits (roster shape).
-  // Anything else (notes, addresses, free text leaked into the column) must
-  // never become a tech group — the job imports as Unassigned + a warning.
-  const TECH_ID_SHAPE = /^\d{4}$/;
-
   rows.forEach((row, index) => {
     let rawTech = techColumn ? String(row[techColumn] ?? '').trim() : '';
     if (!rawTech) rawTech = readColumn(row, 'Tech', 'Technician', 'Tech ID', 'TechID', 'Emp #', 'EMP', 'Employee', 'Tech #', 'Tec', 'Técnico', 'Op #', 'Operario');
-    const techIdRaw = rawTech.replace(/\.0$/, '').replace(/\s+/g, '').toUpperCase();
-    const techId = TECH_ID_SHAPE.test(techIdRaw) ? techIdRaw : '';
-    if (techIdRaw && !techId) invalidTechCount += 1;
+    const techId = extractTechId(rawTech);
+    if (rawTech.trim() && !techId) invalidTechCount += 1;
 
     let rawJob = jobColumn ? String(row[jobColumn] ?? '').trim() : '';
     if (!rawJob) rawJob = readColumn(row, 'Job Id', 'Job ID', 'Job #', 'Work Order', 'WO #', 'WO', 'JobId', 'Ticket', 'Service Order', 'Order #', 'Orden', 'Folio');

@@ -10,6 +10,7 @@ import { buildHash, parseHash } from '../../../legacy/routing';
 import { downloadPhotosZip } from '../../../services/photos.service';
 import { generateJobExcel, generateJobPDF, generateEarningsExcel } from '../../../legacy/reporting';
 import { Lightbox } from '../../technician/components/Lightbox';
+import { isValidTechId } from '../../../services/routeImport.service';
 
 /* ── TECH DAY BOARD — Tablero visual supervisor ── */
 function TechDayBoard({routes, lang, onSelectJob}:{routes:any[], lang:string, onSelectJob:(job:any)=>void}) {
@@ -19,10 +20,9 @@ function TechDayBoard({routes, lang, onSelectJob}:{routes:any[], lang:string, on
   // Any tech_id that is not exactly 4 digits is garbage from old imports
   // (notes/addresses leaked into the column) — group it under Unassigned
   // instead of rendering fake technician rows.
-  const TECH_ID_OK = /^\d{4}$/;
   const UNASSIGNED = '__unassigned__';
   const techGroups = routes.reduce((acc:any, job:any) => {
-    const key = TECH_ID_OK.test(String(job.tech_id||'')) ? job.tech_id : UNASSIGNED;
+    const key = isValidTechId(job.tech_id) ? job.tech_id : UNASSIGNED;
     if (!acc[key]) acc[key] = [];
     acc[key].push(job);
     return acc;
