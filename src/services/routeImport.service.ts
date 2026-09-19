@@ -28,6 +28,11 @@ export type RouteImportPreview = {
   warnings: string[];
 };
 
+// ── TECH ID: formato aceptado (fuente única, también la usa TechDayBoard) ──
+// Acepta 3-10 caracteres A-Z/0-9/-/_ que incluyan al menos un dígito:
+//   6017, 60170, T6017, TECH-105, 8807A
+// Tolera "6017 - Rayner" / "6017: Rayner" (toma solo el ID).
+// Rechaza texto libre y direcciones ("123 SW 8th St", "NOTES", "PENDING").
 export function extractTechId(raw: unknown): string {
   const cleaned = String(raw ?? '').trim().replace(/\.0$/, '').toUpperCase();
   if (!cleaned) return '';
@@ -174,6 +179,45 @@ function detectColumn(headers: string[], rows: any[], names: string[], mode: 'te
   return null;
 }
 
+// Elige la columna del técnico mirando los VALORES, no solo el nombre del encabezado.
+// Si el Excel trae "Technician" (nombre) antes de "Tech ID" (número), gana la que
+// tenga más valores con forma de ID de técnico (ver extractTechId).
+function detectTechColumn(headers: string[], rows: any[]): string | null {
+  const ALIASES = ['tech', 'technician', 'tech id', 'techid', 'emp', 'employee', 'tec', 'técnico', 'worker', 'operario', 'op #', 'op#'];
+  const sample = rows.slice(0, 40);
+  const score = (h: string) => sample.reduce((n, r) => {
+    const v = String(r[h] ?? '').trim().replace(/\.0$/, '');
+    return n + (v && isValidTechId(v) ? 1 : 0);
+  }, 0);
+
+  const named = headers.filter((h) => {
+    const n = normalizeHeader(h);
+    return ALIASES.some((a) => n === a || n.startsWith(a) || n.includes(a));
+  });
+  let best: string | null = null;
+  let bestScore = 0;
+  for (const h of named) {
+    const sc = score(h);
+    if (sc > bestScore) { best = h; bestScore = sc; }
+  }
+  if (best) return best;
+
+  // Sin encabezado reconocible con IDs válidos: buscar por valores, ignorando columnas que no son de técnico.
+  const NOT_TECH = /job|order|ticket|\bwo\b|zip|postal|phone|home|business|cell|tel|address|street|house|city|type|pay|date/;
+  let fallback: string | null = null;
+  let fallbackScore = 0;
+  for (const h of headers) {
+    if (NOT_TECH.test(normalizeHeader(h))) continue;
+    const filled = sample.filter((r) => String(r[h] ?? '').trim()).length;
+    const sc = score(h);
+    if (filled && sc >= Math.ceil(filled * 0.6) && sc > fallbackScore) { fallback = h; fallbackScore = sc; }
+  }
+  if (fallback) return fallback;
+
+  // Último recurso: comportamiento original (primera columna con nombre parecido) para que salgan los warnings.
+  return named[0] ?? null;
+}
+
 export async function parseRouteImport(file: File, region: string, routeDate = new Date().toLocaleDateString('en-CA')): Promise<RouteImportPreview> {
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
@@ -214,7 +258,7 @@ export async function parseRouteImport(file: File, region: string, routeDate = n
   if (!rows.length) throw new Error('The Excel file is empty or has no readable data.');
 
   const headers = Object.keys(rows[0] || {});
-  const techColumn = detectColumn(headers, rows, ['tech', 'technician', 'tech id', 'techid', 'emp', 'employee', 'tec', 'técnico', 'worker', 'operario', 'op #', 'op#'], 'tech');
+  const techColumn = detectTechColumn(headers, rows);
   const jobColumn = detectColumn(headers, rows, ['job id', 'job#', 'job #', 'jobid', 'work order', 'order', 'wo #', 'wo#', 'ticket', 'job number', 'service order', 'order #', 'orden', 'folio'], 'job');
   const addressColumn = detectColumn(headers, rows, ['address', 'full address', 'service address', 'svc address', 'street address', 'location', 'dirección', 'dir', 'domicilio'], 'address');
 
@@ -223,6 +267,10 @@ export async function parseRouteImport(file: File, region: string, routeDate = n
   let duplicateJobCount = 0;
   let invalidPhoneCount = 0;
   let invalidTechCount = 0;
+  // Tech id shape: see extractTechId() above (numeric 4-5 dígitos O alfanumérico).
+  // Notes, addresses or free text leaked into the column never become a tech
+  // group — the job imports as Unassigned + a warning.
+
   rows.forEach((row, index) => {
     let rawTech = techColumn ? String(row[techColumn] ?? '').trim() : '';
     if (!rawTech) rawTech = readColumn(row, 'Tech', 'Technician', 'Tech ID', 'TechID', 'Emp #', 'EMP', 'Employee', 'Tech #', 'Tec', 'Técnico', 'Op #', 'Operario');
@@ -274,7 +322,7 @@ export async function parseRouteImport(file: File, region: string, routeDate = n
   const warnings: string[] = [];
   if (duplicateJobCount) warnings.push(`${duplicateJobCount} duplicate job IDs were skipped.`);
   if (invalidPhoneCount) warnings.push(`${invalidPhoneCount} phone numbers need review.`);
-  if (invalidTechCount) warnings.push(`${invalidTechCount} rows had text instead of a 4-digit tech # — imported as Unassigned.`);
+  if (invalidTechCount) warnings.push(`${invalidTechCount} rows had an unrecognized tech ID (free text or bad format) — imported as Unassigned.`);
   if (!techColumn) warnings.push('Technician column was inferred from values.');
   if (!jobColumn) warnings.push('Job ID column was inferred from values.');
   if (!addressColumn) warnings.push('Address column was inferred from values.');
