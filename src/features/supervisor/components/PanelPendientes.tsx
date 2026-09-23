@@ -7,16 +7,42 @@
 //   2) Notas/pendientes por técnico (usa la tabla `technicians` ya existente)
 //   3) Marcar como realizado/no realizado + "X días pendiente"
 //
+// Tema oscuro incluido (v2) — ajustado para calzar con el look real de
+// Guajiro & Sons (fondo navy, texto claro, acento azul). Si tus tonos
+// exactos son distintos, cambia las constantes en `THEME` abajo y se
+// propagan a todo el componente.
+//
 // AJUSTAR ANTES DE PEGAR:
 //   - El import de `supabase` (usa el mismo cliente que ya usa el resto de
 //     App.tsx, p.ej. `import { supabase } from './lib/supabase'`).
-//   - Si no usas Tailwind, avísame y te paso la versión con estilos inline.
 //   - `region` está fijado a 'miami'; si ya tienes una variable de región
 //     activa en el Supervisor Portal, pásala como prop en vez del literal.
 // ============================================================================
 
+import type { CSSProperties } from 'react';
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { sb as supabase } from '../../../config/supabase';
+
+// ----------------------------------------------------------------------------
+// SECCIÓN: Tema (ajusta aquí si tus tonos exactos son distintos)
+// ----------------------------------------------------------------------------
+
+const THEME = {
+  bg: 'transparent',
+  card: '#141c30',
+  cardBorder: '#26324a',
+  cardBorderDashed: '#3a4a6b',
+  textPrimary: '#e8ecf4',
+  textSecondary: '#8b96ad',
+  textMuted: '#5d6a85',
+  accent: '#3b82f6',
+  accentText: '#ffffff',
+  inputBg: '#0c1424',
+  inputBorder: '#2d3a56',
+  danger: '#f87171',
+  warn: '#fbbf24',
+  ok: '#34d399',
+};
 
 // ----------------------------------------------------------------------------
 // SECCIÓN: Tipos
@@ -41,7 +67,7 @@ interface PanelNote {
   title: string;
   content: string;
   status: NoteStatus;
-  due_date: string | null; // 'YYYY-MM-DD'
+  due_date: string | null;
   region: string;
   created_by: string | null;
   created_at: string;
@@ -65,17 +91,15 @@ function diasPendiente(createdAt: string): number {
 }
 
 function badgeColor(dias: number): string {
-  if (dias >= 7) return '#dc2626'; // rojo — llevando mucho
-  if (dias >= 3) return '#d97706'; // ámbar — atención
-  return '#16a34a'; // verde — reciente
+  if (dias >= 7) return THEME.danger;
+  if (dias >= 3) return THEME.warn;
+  return THEME.ok;
 }
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Comprime una foto con canvas antes de subirla (mismo patrón que ya
-// usa el resto de la app para fotos de jobs).
 async function comprimirFoto(file: File, maxDim = 1280, quality = 0.72): Promise<Blob> {
   const img = document.createElement('img');
   const url = URL.createObjectURL(file);
@@ -207,6 +231,43 @@ async function uploadNotePhoto(noteId: string, file: File): Promise<PanelNotePho
 }
 
 // ----------------------------------------------------------------------------
+// SECCIÓN: Estilos compartidos de formulario (inputs/textarea/botones)
+// ----------------------------------------------------------------------------
+
+const inputStyle: CSSProperties = {
+  width: '100%',
+  padding: '8px 10px',
+  marginBottom: 8,
+  background: THEME.inputBg,
+  border: `1px solid ${THEME.inputBorder}`,
+  borderRadius: 6,
+  color: THEME.textPrimary,
+  fontSize: 14,
+  boxSizing: 'border-box',
+};
+
+const buttonPrimary: CSSProperties = {
+  background: THEME.accent,
+  color: THEME.accentText,
+  border: 'none',
+  borderRadius: 6,
+  padding: '8px 14px',
+  fontSize: 14,
+  fontWeight: 600,
+  cursor: 'pointer',
+};
+
+const buttonGhost: CSSProperties = {
+  background: 'transparent',
+  border: `1px solid ${THEME.inputBorder}`,
+  color: THEME.textSecondary,
+  borderRadius: 6,
+  padding: '6px 10px',
+  fontSize: 13,
+  cursor: 'pointer',
+};
+
+// ----------------------------------------------------------------------------
 // SECCIÓN: Mini calendario (sin dependencias externas)
 // ----------------------------------------------------------------------------
 
@@ -235,15 +296,19 @@ function MiniCalendar({
   const monthLabel = cursor.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
 
   return (
-    <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, maxWidth: 320 }}>
+    <div style={{ border: `1px solid ${THEME.cardBorder}`, background: THEME.card, borderRadius: 10, padding: 12, maxWidth: 320 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <button onClick={() => setCursor(new Date(year, month - 1, 1))} aria-label="Mes anterior">‹</button>
-        <strong style={{ textTransform: 'capitalize' }}>{monthLabel}</strong>
-        <button onClick={() => setCursor(new Date(year, month + 1, 1))} aria-label="Mes siguiente">›</button>
+        <button onClick={() => setCursor(new Date(year, month - 1, 1))} aria-label="Mes anterior" style={{ ...buttonGhost, padding: '2px 8px' }}>
+          ‹
+        </button>
+        <strong style={{ textTransform: 'capitalize', color: THEME.textPrimary }}>{monthLabel}</strong>
+        <button onClick={() => setCursor(new Date(year, month + 1, 1))} aria-label="Mes siguiente" style={{ ...buttonGhost, padding: '2px 8px' }}>
+          ›
+        </button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, fontSize: 12 }}>
         {['D', 'L', 'M', 'M', 'J', 'V', 'S'].map((d, i) => (
-          <div key={i} style={{ textAlign: 'center', color: '#9ca3af' }}>{d}</div>
+          <div key={i} style={{ textAlign: 'center', color: THEME.textMuted }}>{d}</div>
         ))}
         {cells.map((day, i) => {
           if (day === null) return <div key={i} />;
@@ -259,9 +324,9 @@ function MiniCalendar({
                 position: 'relative',
                 padding: '6px 0',
                 borderRadius: 6,
-                border: isToday ? '1px solid #2563eb' : '1px solid transparent',
-                background: isSelected ? '#2563eb' : 'transparent',
-                color: isSelected ? '#fff' : '#111827',
+                border: isToday && !isSelected ? `1px solid ${THEME.accent}` : '1px solid transparent',
+                background: isSelected ? THEME.accent : 'transparent',
+                color: isSelected ? THEME.accentText : THEME.textPrimary,
                 cursor: 'pointer',
               }}
             >
@@ -276,7 +341,7 @@ function MiniCalendar({
                     width: 4,
                     height: 4,
                     borderRadius: '50%',
-                    background: isSelected ? '#fff' : '#2563eb',
+                    background: isSelected ? THEME.accentText : THEME.accent,
                   }}
                 />
               )}
@@ -289,7 +354,7 @@ function MiniCalendar({
 }
 
 // ----------------------------------------------------------------------------
-// SECCIÓN: Tarjeta de nota (usada tanto para pendientes como notas de técnico)
+// SECCIÓN: Tarjeta de nota
 // ----------------------------------------------------------------------------
 
 function NoteCard({
@@ -309,23 +374,23 @@ function NoteCard({
   return (
     <div
       style={{
-        border: '1px solid #e5e7eb',
+        border: `1px solid ${THEME.cardBorder}`,
         borderRadius: 10,
         padding: 12,
         marginBottom: 10,
-        opacity: isDone ? 0.6 : 1,
-        background: '#fff',
+        opacity: isDone ? 0.55 : 1,
+        background: THEME.card,
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <div style={{ flex: 1 }}>
           {note.kind === 'tech_note' && (
-            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>
-              Técnico: <strong>{note.tech_name || note.tech_id}</strong>
+            <div style={{ fontSize: 12, color: THEME.textSecondary, marginBottom: 2 }}>
+              Técnico: <strong style={{ color: THEME.textPrimary }}>{note.tech_name || note.tech_id}</strong>
             </div>
           )}
-          {note.title && <div style={{ fontWeight: 600 }}>{note.title}</div>}
-          <div style={{ whiteSpace: 'pre-wrap', color: '#374151', fontSize: 14 }}>{note.content}</div>
+          {note.title && <div style={{ fontWeight: 600, color: THEME.textPrimary }}>{note.title}</div>}
+          <div style={{ whiteSpace: 'pre-wrap', color: THEME.textPrimary, fontSize: 14 }}>{note.content}</div>
         </div>
 
         <label
@@ -334,6 +399,7 @@ function NoteCard({
             alignItems: 'center',
             gap: 6,
             fontSize: 13,
+            color: THEME.textSecondary,
             cursor: 'pointer',
             whiteSpace: 'nowrap',
           }}
@@ -343,7 +409,7 @@ function NoteCard({
         </label>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
         {!isDone && (
           <span
             style={{
@@ -359,10 +425,10 @@ function NoteCard({
           </span>
         )}
         {note.due_date && (
-          <span style={{ fontSize: 12, color: '#6b7280' }}>Programado: {note.due_date}</span>
+          <span style={{ fontSize: 12, color: THEME.textSecondary }}>Programado: {note.due_date}</span>
         )}
 
-        <label style={{ marginLeft: 'auto', fontSize: 12, color: '#2563eb', cursor: 'pointer' }}>
+        <label style={{ marginLeft: 'auto', fontSize: 12, color: THEME.accent, cursor: 'pointer' }}>
           + Foto
           <input
             type="file"
@@ -376,7 +442,7 @@ function NoteCard({
             }}
           />
         </label>
-        <button onClick={() => onDelete(note.id)} style={{ fontSize: 12, color: '#dc2626', border: 'none', background: 'none', cursor: 'pointer' }}>
+        <button onClick={() => onDelete(note.id)} style={{ fontSize: 12, color: THEME.danger, border: 'none', background: 'none', cursor: 'pointer' }}>
           Eliminar
         </button>
       </div>
@@ -388,7 +454,7 @@ function NoteCard({
               <img
                 src={p.thumb_url || p.photo_url}
                 alt=""
-                style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, border: '1px solid #e5e7eb' }}
+                style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, border: `1px solid ${THEME.cardBorder}` }}
               />
             </a>
           ))}
@@ -411,7 +477,6 @@ export default function PanelPendientes({ region = 'miami' }: { region?: string 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Formulario rápido
   const [newContent, setNewContent] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [newDueDate, setNewDueDate] = useState<string>('');
@@ -529,51 +594,69 @@ export default function PanelPendientes({ region = 'miami' }: { region?: string 
     }
   };
 
+  const tabButtonStyle = (active: boolean): CSSProperties => ({
+    background: active ? THEME.accent : 'transparent',
+    color: active ? THEME.accentText : THEME.textSecondary,
+    border: active ? 'none' : `1px solid ${THEME.inputBorder}`,
+    borderRadius: 6,
+    padding: '6px 14px',
+    fontSize: 14,
+    fontWeight: active ? 700 : 400,
+    cursor: 'pointer',
+  });
+
   return (
-    <div style={{ padding: 16, maxWidth: 900 }}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <button onClick={() => setTab('tareas')} style={{ fontWeight: tab === 'tareas' ? 700 : 400 }}>
+    <div style={{ padding: 16, maxWidth: 900, background: THEME.bg, color: THEME.textPrimary }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
+        <button onClick={() => setTab('tareas')} style={tabButtonStyle(tab === 'tareas')}>
           Pendientes
         </button>
-        <button onClick={() => setTab('tecnicos')} style={{ fontWeight: tab === 'tecnicos' ? 700 : 400 }}>
+        <button onClick={() => setTab('tecnicos')} style={tabButtonStyle(tab === 'tecnicos')}>
           Técnicos
         </button>
-        <label style={{ marginLeft: 'auto', fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
+        <label style={{ marginLeft: 'auto', fontSize: 13, display: 'flex', alignItems: 'center', gap: 4, color: THEME.textSecondary }}>
           <input type="checkbox" checked={showDoneToo} onChange={(e) => setShowDoneToo(e.target.checked)} />
           Ver realizados
         </label>
       </div>
 
       {error && (
-        <div style={{ color: '#dc2626', fontSize: 13, marginBottom: 12 }}>{error}</div>
+        <div style={{ color: THEME.danger, fontSize: 13, marginBottom: 12 }}>{error}</div>
       )}
-      {loading && <div>Cargando…</div>}
+      {loading && <div style={{ color: THEME.textSecondary }}>Cargando…</div>}
 
       {!loading && tab === 'tareas' && (
         <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
           <MiniCalendar selected={selectedDate} onSelect={setSelectedDate} markedDates={markedDates} />
 
           <div style={{ flex: 1, minWidth: 280 }}>
-            <div style={{ border: '1px dashed #d1d5db', borderRadius: 10, padding: 12, marginBottom: 16 }}>
+            <div style={{ border: `1px dashed ${THEME.cardBorderDashed}`, background: THEME.card, borderRadius: 10, padding: 12, marginBottom: 16 }}>
               <input
                 placeholder="Título (opcional)"
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                style={{ width: '100%', marginBottom: 6, padding: 6 }}
+                style={inputStyle}
               />
               <textarea
                 placeholder="¿Qué tienes pendiente?"
                 value={newContent}
                 onChange={(e) => setNewContent(e.target.value)}
-                style={{ width: '100%', marginBottom: 6, padding: 6, minHeight: 60 }}
+                style={{ ...inputStyle, minHeight: 60, resize: 'vertical' }}
               />
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <input type="date" value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} />
-                <button onClick={handleCreateTask}>Agregar pendiente</button>
+                <input
+                  type="date"
+                  value={newDueDate}
+                  onChange={(e) => setNewDueDate(e.target.value)}
+                  style={{ ...inputStyle, width: 'auto', marginBottom: 0 }}
+                />
+                <button onClick={handleCreateTask} style={buttonPrimary}>
+                  Agregar pendiente
+                </button>
               </div>
             </div>
 
-            {tareas.length === 0 && <div style={{ color: '#9ca3af' }}>Nada pendiente para este día.</div>}
+            {tareas.length === 0 && <div style={{ color: THEME.textMuted }}>Nada pendiente para este día.</div>}
             {tareas.map((n) => (
               <NoteCard key={n.id} note={n} onToggle={handleToggle} onDelete={handleDelete} onAddPhoto={handleAddPhoto} />
             ))}
@@ -583,8 +666,12 @@ export default function PanelPendientes({ region = 'miami' }: { region?: string 
 
       {!loading && tab === 'tecnicos' && (
         <div>
-          <div style={{ border: '1px dashed #d1d5db', borderRadius: 10, padding: 12, marginBottom: 16 }}>
-            <select value={newTechId} onChange={(e) => setNewTechId(e.target.value)} style={{ marginBottom: 6, padding: 6, width: '100%' }}>
+          <div style={{ border: `1px dashed ${THEME.cardBorderDashed}`, background: THEME.card, borderRadius: 10, padding: 12, marginBottom: 16 }}>
+            <select
+              value={newTechId}
+              onChange={(e) => setNewTechId(e.target.value)}
+              style={inputStyle}
+            >
               <option value="">Selecciona técnico…</option>
               {technicians.map((t) => (
                 <option key={t.id} value={t.id}>
@@ -596,17 +683,19 @@ export default function PanelPendientes({ region = 'miami' }: { region?: string 
               placeholder="Nota o pendiente sobre este técnico"
               value={newContent}
               onChange={(e) => setNewContent(e.target.value)}
-              style={{ width: '100%', marginBottom: 6, padding: 6, minHeight: 60 }}
+              style={{ ...inputStyle, minHeight: 60, resize: 'vertical' }}
             />
-            <button onClick={handleCreateTechNote}>Agregar nota</button>
+            <button onClick={handleCreateTechNote} style={buttonPrimary}>
+              Agregar nota
+            </button>
           </div>
 
           {technicians
             .filter((t) => notasPorTecnico[t.id]?.length)
             .map((t) => (
               <div key={t.id} style={{ marginBottom: 20 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                  {t.name} <span style={{ color: '#9ca3af', fontWeight: 400 }}>({t.id})</span>
+                <div style={{ fontWeight: 700, marginBottom: 6, color: THEME.textPrimary }}>
+                  {t.name} <span style={{ color: THEME.textMuted, fontWeight: 400 }}>({t.id})</span>
                 </div>
                 {notasPorTecnico[t.id].map((n) => (
                   <NoteCard key={n.id} note={n} onToggle={handleToggle} onDelete={handleDelete} onAddPhoto={handleAddPhoto} />
@@ -614,7 +703,9 @@ export default function PanelPendientes({ region = 'miami' }: { region?: string 
               </div>
             ))}
 
-          {Object.keys(notasPorTecnico).length === 0 && <div style={{ color: '#9ca3af' }}>Sin notas de técnicos pendientes.</div>}
+          {Object.keys(notasPorTecnico).length === 0 && (
+            <div style={{ color: THEME.textMuted }}>Sin notas de técnicos pendientes.</div>
+          )}
         </div>
       )}
     </div>
