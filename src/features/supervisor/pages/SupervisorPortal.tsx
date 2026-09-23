@@ -161,7 +161,7 @@ function SupervisorPortal({onLogout,onSessionExpired,lang,setLang,region,auth,ac
   const[deleteJobPhrase,setDeleteJobPhrase]=useState('');
 
   const loadDbTechs=useCallback(async()=>{
-    if(!SUPABASE_CONFIGURED || !secureAuth){
+    if(!SUPABASE_CONFIGURED){
       const localPins=readLocalTechnicianPins();
       setDbTechs(regionTechs.map((tech:any)=>({...tech,active:true,pin:localPins[String(tech.id)]||null})));
       return;
@@ -759,7 +759,7 @@ function SupervisorPortal({onLogout,onSessionExpired,lang,setLang,region,auth,ac
             <div style={{fontSize:12,color:C.dim,marginBottom:16}}>#{reassignJob.job_id} — {reassignJob.address}</div>
             <select value={reassignTech} onChange={e=>setReassignTech(e.target.value)} style={{width:"100%",background:"#0e1e3a",border:"1px solid #162e58",borderRadius:8,padding:"10px 12px",color:C.text,fontSize:13,fontFamily:"'Barlow',sans-serif",marginBottom:12,outline:"none"}}>
               <option value="">{lang==='es'?'— Seleccionar técnico —':'— Select technician —'}</option>
-              {dbTechs.map((tc:any)=><option key={tc.id} value={tc.id}>{tc.id} — {tc.name}</option>)}
+              {dbTechs.filter((tc:any)=>tc.active!==false).map((tc:any)=><option key={tc.id} value={tc.id}>{tc.id} — {tc.name}</option>)}
             </select>
             <div style={{display:"flex",gap:8}}>
               <button onClick={doReassign} disabled={!reassignTech} style={{flex:1,background:"#00dc85",border:"none",borderRadius:8,padding:"11px",color:"#04091c",fontWeight:800,cursor:"pointer",fontSize:13,opacity:reassignTech?1:0.5}}>{lang==='es'?'Confirmar':'Confirm'}</button>
@@ -775,7 +775,7 @@ function SupervisorPortal({onLogout,onSessionExpired,lang,setLang,region,auth,ac
             <div style={{fontSize:12,color:C.dim,marginBottom:16}}>{lang==='es'?`Mover TODOS los trabajos de ${getTechName(bulkReassignFrom)} (${routes.filter(r=>r.tech_id===bulkReassignFrom).length} trabajos) a otro técnico.`:`Move ALL jobs from ${getTechName(bulkReassignFrom)} (${routes.filter(r=>r.tech_id===bulkReassignFrom).length} jobs) to another technician.`}</div>
             <select value={bulkReassignTo} onChange={e=>setBulkReassignTo(e.target.value)} style={{width:"100%",background:"#0e1e3a",border:"1px solid #162e58",borderRadius:8,padding:"10px 12px",color:C.text,fontSize:13,fontFamily:"'Barlow',sans-serif",marginBottom:12,outline:"none"}}>
               <option value="">{lang==='es'?'— Seleccionar técnico —':'— Select technician —'}</option>
-              {dbTechs.filter((tc:any)=>tc.id!==bulkReassignFrom).map((tc:any)=><option key={tc.id} value={tc.id}>{tc.id} — {tc.name}</option>)}
+              {dbTechs.filter((tc:any)=>tc.id!==bulkReassignFrom&&tc.active!==false).map((tc:any)=><option key={tc.id} value={tc.id}>{tc.id} — {tc.name}</option>)}
             </select>
             <div style={{display:"flex",gap:8}}>
               <button onClick={doBulkReassign} disabled={!bulkReassignTo} style={{flex:1,background:"#ffbe00",border:"none",borderRadius:8,padding:"11px",color:"#04091c",fontWeight:800,cursor:"pointer",fontSize:13,opacity:bulkReassignTo?1:0.5}}>{lang==='es'?'Confirmar':'Confirm'}</button>
