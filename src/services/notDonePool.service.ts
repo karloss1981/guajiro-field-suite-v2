@@ -16,7 +16,7 @@ const clean = (value: unknown) => String(value ?? '').trim();
 const normalizedAddress = (job: JobLike) => `${clean(job.address).toLowerCase()}|${clean(job.city).toLowerCase()}`;
 
 function poolSignalText(row: JobLike) {
-  return [row.current_status, row.resolution_type, row.latest_reason, row.original_reason, row.latest_notes, row.notes, row.job_note, row.status]
+  return [row.current_status, row.resolution_type, row.latest_reason, row.original_reason, row.latest_notes, row.notes, row.job_note]
     .map((value) => clean(value).toLowerCase())
     .filter(Boolean)
     .join(' | ');
@@ -24,14 +24,16 @@ function poolSignalText(row: JobLike) {
 
 function inferPoolStatus(row: JobLike) {
   const explicit = clean(row.current_status).toLowerCase();
+  if (explicit === 'open') return 'open';
   if (explicit === 'resolved' || explicit === 'completed') return 'resolved';
   if (explicit === 'cancelled' || explicit === 'canceled') return 'cancelled';
   if (explicit === 'scheduled') return 'scheduled';
-  const text = poolSignalText(row)
+  let text = poolSignalText(row)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+  text = text.replace(/not[\s_-]?done/g, '');
   if (/(cancel|cancelado|cancelled|canceled|cliente cancelo|customer cancel|cx cancel|no quiere|refused)/.test(text)) return 'cancelled';
-  if (/(resolved|resuelto|completed|complete|done|cerrado|fixed)/.test(text)) return 'resolved';
+  if (/\b(resolved|resuelto|completed|fixed)\b/.test(text)) return 'resolved';
   return 'open';
 }
 
