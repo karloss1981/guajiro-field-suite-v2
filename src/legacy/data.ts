@@ -140,13 +140,14 @@ const TECHS_MIAMI = [
   {id:"7077",name:"Maykel Lopez Morales",region:"miami"},{id:"7102",name:"Yandy Gonzalez",region:"miami"},
   {id:"7113",name:"Vladimir Pujol",region:"miami"},{id:"7137",name:"Camilo Harrison",region:"miami"},
   {id:"7163",name:"Alberto Amaya",region:"miami"},{id:"7164",name:"Omar Bernton",region:"miami"},
-  {id:"7191",name:"Wilfredo Herrera",region:"miami"},{id:"7235",name:"Bernal Hernandez",region:"miami"},
+  {id:"7235",name:"Bernal Hernandez",region:"miami"},
   {id:"7260",name:"Anier Villar",region:"miami"},{id:"7270",name:"Julio Florez",region:"miami"},
   {id:"7272",name:"Renier Gonzalez",region:"miami"},{id:"7377",name:"Alberto Denis Marichal",region:"miami"},
   {id:"7419",name:"Juan Guillermo Aranda",region:"miami"},{id:"7644",name:"Juan Trujillo",region:"miami"},
   {id:"7974",name:"Droo Pool",region:"miami"},{id:"8723",name:"Onil Perez",region:"miami"},
   {id:"8799",name:"Michel Santana",region:"miami"},{id:"8804",name:"Yunior Barba",region:"miami"},
   {id:"8807",name:"Idan Caballero",region:"miami"},
+  {id:"I03S",name:"Lazaro Gonzalez Cancio",region:"miami"},{id:"I03Z",name:"Francisco Gonzales Milian",region:"miami"},
 ];
 
 const TECHS_SWFL:{id:string,name:string,region:string}[] = [
