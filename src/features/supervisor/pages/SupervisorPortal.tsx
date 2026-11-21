@@ -102,7 +102,7 @@ function SupervisorPortal({onLogout,onSessionExpired,lang,setLang,region,auth,ac
   const fileRef=useRef<any>(null);
   const today=new Date().toLocaleDateString('en-CA');
   const routeDateCacheKey=`gfs_supervisor_route_date_${region}`;
-  const[importRouteDate,setImportRouteDate]=useState(()=>localStorage.getItem(routeDateCacheKey)||getDefaultImportRouteDate());
+  const[importRouteDate,setImportRouteDate]=useState(()=>{const cached=localStorage.getItem(routeDateCacheKey);return cached&&cached>=today?cached:getDefaultImportRouteDate();});
   const routeUploadWindowLabel=getRouteUploadWindowLabel(lang);
   const routeCacheKey=(date=importRouteDate)=>`gfs_supervisor_routes_${region}_${date}`;
   const normalizeRouteRows=(rows:any[],date=importRouteDate)=>rows.map((job:any,index:number)=>({
