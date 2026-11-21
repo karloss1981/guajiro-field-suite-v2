@@ -1,4 +1,4 @@
-export const ROUTE_ROLLOVER_HOUR = 23; // 7:00 PM local time
+export const ROUTE_ROLLOVER_HOUR = 19; // 7:00 PM local time
 
 function toLocalIsoDate(date: Date) {
   return date.toLocaleDateString('en-CA');
